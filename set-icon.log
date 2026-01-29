@@ -1,0 +1,7 @@
+Starting set-icon script...
+Exe path: D:\Repositories\Personal\AkiRestClient\release\win-unpacked\Fetchy.exe
+Icon path: D:\Repositories\Personal\AkiRestClient\build\icons\win\icon.ico
+rcedit binary: D:\Repositories\Personal\AkiRestClient\node_modules\rcedit\bin\rcedit-x64.exe
+All files exist, running rcedit...
+Command: "D:\Repositories\Personal\AkiRestClient\node_modules\rcedit\bin\rcedit-x64.exe" "D:\Repositories\Personal\AkiRestClient\release\win-unpacked\Fetchy.exe" --set-icon "D:\Repositories\Personal\AkiRestClient\build\icons\win\icon.ico"
+Icon set successfully!

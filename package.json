@@ -1,0 +1,86 @@
+{
+  "name": "fetchy",
+  "version": "1.0.0",
+  "description": "Fetchy - Local by design. Reliable by nature.",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "electron:build": "vite build && electron-builder && node scripts/set-icon.js",
+    "electron:preview": "vite build && electron ."
+  },
+  "keywords": [
+    "rest",
+    "api",
+    "client",
+    "postman",
+    "hoppscotch",
+    "bruno"
+  ],
+  "author": "",
+  "license": "MIT",
+  "build": {
+    "appId": "com.fetchy.app",
+    "productName": "Fetchy",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*"
+    ],
+    "icon": "build/icons/win/icon.ico",
+    "win": {
+      "target": "nsis",
+      "signAndEditExecutable": false,
+      "icon": "build/icons/win/icon.ico"
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "build/icons/mac/icon.icns"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "build/icons/png"
+    }
+  },
+  "dependencies": {
+    "@codemirror/lang-json": "^6.0.1",
+    "@codemirror/state": "^6.4.1",
+    "@codemirror/theme-one-dark": "^6.1.2",
+    "@codemirror/view": "^6.26.3",
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.19",
+    "codemirror": "^6.0.1",
+    "immer": "^10.0.4",
+    "js-yaml": "^4.1.0",
+    "lucide-react": "^0.358.0",
+    "postcss": "^8.4.38",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "tailwindcss": "^3.4.1",
+    "uuid": "^9.0.1",
+    "vite": "^4.5.3",
+    "zustand": "^4.5.2"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/react": "^18.2.73",
+    "@types/react-dom": "^18.2.23",
+    "concurrently": "^8.2.2",
+    "electron": "^40.0.0",
+    "electron-builder": "^26.4.0",
+    "electron-icon-maker": "^0.0.5",
+    "jimp": "^1.6.0",
+    "png-to-ico": "^3.0.1",
+    "rcedit": "^5.0.2",
+    "sharp": "^0.34.5",
+    "typescript": "^5.4.3",
+    "wait-on": "^7.2.0"
+  }
+}

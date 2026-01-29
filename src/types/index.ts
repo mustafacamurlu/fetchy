@@ -1,0 +1,255 @@
+// Type definitions for the REST Client Application
+
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD' | 'OPTIONS';
+
+export interface KeyValue {
+  id: string;
+  key: string;
+  value: string;
+  enabled: boolean;
+  description?: string;
+  isSecret?: boolean;
+}
+
+export interface RequestAuth {
+  type: 'none' | 'inherit' | 'basic' | 'bearer' | 'api-key';
+  basic?: {
+    username: string;
+    password: string;
+  };
+  bearer?: {
+    token: string;
+  };
+  apiKey?: {
+    key: string;
+    value: string;
+    addTo: 'header' | 'query';
+  };
+}
+
+export interface RequestBody {
+  type: 'none' | 'json' | 'form-data' | 'x-www-form-urlencoded' | 'raw' | 'binary';
+  raw?: string;
+  formData?: KeyValue[];
+  urlencoded?: KeyValue[];
+}
+
+export interface ApiRequest {
+  id: string;
+  name: string;
+  method: HttpMethod;
+  url: string;
+  headers: KeyValue[];
+  params: KeyValue[];
+  body: RequestBody;
+  auth: RequestAuth;
+  preRequestScript?: string;
+  testScript?: string;
+}
+
+export interface ApiResponse {
+  status: number;
+  statusText: string;
+  headers: Record<string, string>;
+  body: string;
+  time: number;
+  size: number;
+}
+
+export interface RequestFolder {
+  id: string;
+  name: string;
+  description?: string;
+  requests: ApiRequest[];
+  folders: RequestFolder[];
+  expanded?: boolean;
+  auth?: RequestAuth;
+}
+
+export interface Collection {
+  id: string;
+  name: string;
+  description?: string;
+  folders: RequestFolder[];
+  requests: ApiRequest[];
+  variables?: KeyValue[];
+  expanded?: boolean;
+  auth?: RequestAuth;
+}
+
+export interface Environment {
+  id: string;
+  name: string;
+  variables: KeyValue[];
+  isActive?: boolean;
+}
+
+export interface RequestHistoryItem {
+  id: string;
+  request: ApiRequest;
+  response?: ApiResponse;
+  timestamp: number;
+}
+
+export interface AppPreferences {
+  homeDirectory: string | null;
+  theme: 'dark' | 'light' | 'system';
+  autoSave: boolean;
+  maxHistoryItems: number;
+}
+
+// OpenAPI types
+export interface OpenAPISpec {
+  openapi?: string;
+  swagger?: string;
+  info: {
+    title: string;
+    version: string;
+    description?: string;
+  };
+  servers?: Array<{
+    url: string;
+    description?: string;
+  }>;
+  paths: Record<string, Record<string, OpenAPIOperation>>;
+}
+
+export interface OpenAPIOperation {
+  summary?: string;
+  description?: string;
+  operationId?: string;
+  tags?: string[];
+  parameters?: OpenAPIParameter[];
+  requestBody?: {
+    description?: string;
+    required?: boolean;
+    content?: Record<string, { schema?: Record<string, unknown> }>;
+  };
+  responses?: Record<string, { description?: string }>;
+}
+
+export interface OpenAPIParameter {
+  name: string;
+  in: 'query' | 'header' | 'path' | 'cookie';
+  description?: string;
+  required?: boolean;
+  schema?: Record<string, unknown>;
+}
+
+// Postman types for import
+export interface PostmanCollection {
+  info: {
+    name: string;
+    description?: string;
+    schema: string;
+  };
+  item: PostmanItem[];
+  variable?: PostmanVariable[];
+}
+
+export interface PostmanItem {
+  name: string;
+  request?: PostmanRequest;
+  item?: PostmanItem[];
+  description?: string;
+}
+
+export interface PostmanRequest {
+  method: string;
+  header?: PostmanHeader[];
+  body?: PostmanBody;
+  url: PostmanUrl | string;
+  auth?: PostmanAuth;
+}
+
+export interface PostmanHeader {
+  key: string;
+  value: string;
+  disabled?: boolean;
+  description?: string;
+}
+
+export interface PostmanBody {
+  mode: string;
+  raw?: string;
+  urlencoded?: PostmanHeader[];
+  formdata?: PostmanHeader[];
+  options?: {
+    raw?: {
+      language?: string;
+    };
+  };
+}
+
+export interface PostmanUrl {
+  raw: string;
+  protocol?: string;
+  host?: string[];
+  path?: string[];
+  query?: PostmanHeader[];
+}
+
+export interface PostmanVariable {
+  key: string;
+  value: string;
+  disabled?: boolean;
+}
+
+export interface PostmanAuth {
+  type: string;
+  basic?: Array<{ key: string; value: string }>;
+  bearer?: Array<{ key: string; value: string }>;
+  apikey?: Array<{ key: string; value: string }>;
+}
+
+// App state types
+export interface TabState {
+  id: string;
+  type: 'request' | 'collection' | 'environment';
+  title: string;
+  requestId?: string;
+  collectionId?: string;
+  folderId?: string;
+  environmentId?: string;
+  isModified?: boolean;
+}
+
+export interface AppState {
+  collections: Collection[];
+  environments: Environment[];
+  activeEnvironmentId: string | null;
+  activeRequestId: string | null;
+  tabs: TabState[];
+  activeTabId: string | null;
+  history: RequestHistoryItem[];
+  sidebarWidth: number;
+  sidebarCollapsed: boolean;
+}
+
+// Electron API type definition
+export interface ElectronAPI {
+  httpRequest: (data: {
+    url: string;
+    method: string;
+    headers: Record<string, string>;
+    body?: string;
+  }) => Promise<ApiResponse>;
+  openFile: (options?: { filters?: Array<{ name: string; extensions: string[] }> }) => Promise<{ filePath: string; content: string } | null>;
+  saveFile: (data: { content: string; defaultPath?: string; filters?: Array<{ name: string; extensions: string[] }> }) => Promise<string | null>;
+  getDataPath: () => Promise<string>;
+  readData: (filename: string) => Promise<string | null>;
+  writeData: (data: { filename: string; content: string }) => Promise<boolean>;
+  getPreferences: () => Promise<AppPreferences | null>;
+  savePreferences: (preferences: AppPreferences) => Promise<boolean>;
+  selectHomeDirectory: () => Promise<string | null>;
+  getHomeDirectory: () => Promise<string>;
+  migrateData: (data: { oldPath: string; newPath: string }) => Promise<boolean>;
+}
+
+// Extend Window interface globally
+declare global {
+  interface Window {
+    electronAPI?: ElectronAPI;
+  }
+}
+
