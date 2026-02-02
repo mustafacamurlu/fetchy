@@ -46,7 +46,7 @@ export const usePreferencesStore = create<PreferencesStore>()((set, get) => ({
     } else {
       // Browser mode - use localStorage
       try {
-        const stored = localStorage.getItem('aki-rest-client-preferences');
+        const stored = localStorage.getItem('fetchy-preferences');
         if (stored) {
           set({ preferences: { ...defaultPreferences, ...JSON.parse(stored) }, isLoading: false });
         } else {

@@ -110,15 +110,15 @@ export default function VariableTooltip({ variableName, position, onClose }: Var
           <span className={`font-mono text-sm ${isSecretVar ? 'text-orange-400' : 'text-purple-400'}`}>{`<<${variableName}>>`}</span>
           {isDefined ? (
             <>
-              <span className="text-xs px-1.5 py-0.5 bg-green-500/20 text-green-400 rounded">defined</span>
+              <span className="text-xs px-1.5 py-0.5 var-defined rounded">defined</span>
               {isSecretVar && (
-                <span className="text-xs px-1.5 py-0.5 bg-orange-500/20 text-orange-400 rounded flex items-center gap-1">
+                <span className="text-xs px-1.5 py-0.5 var-secret rounded flex items-center gap-1">
                   <Lock size={10} /> secret
                 </span>
               )}
             </>
           ) : (
-            <span className="text-xs px-1.5 py-0.5 bg-yellow-500/20 text-yellow-400 rounded">undefined</span>
+            <span className="text-xs px-1.5 py-0.5 var-undefined rounded">undefined</span>
           )}
         </div>
         <button
@@ -135,7 +135,7 @@ export default function VariableTooltip({ variableName, position, onClose }: Var
           <>
             {/* Environment info */}
             <div className="text-xs text-gray-400 mb-2">
-              From: <span className="text-green-400">{activeEnvironment?.name}</span>
+              From: <span className="env-active-text">{activeEnvironment?.name}</span>
             </div>
 
             {/* Value display/edit */}

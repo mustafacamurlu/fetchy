@@ -136,6 +136,10 @@ interface AppStore {
   setSidebarWidth: (width: number) => void;
   toggleSidebar: () => void;
 
+  // Panel widths
+  requestPanelWidth: number;
+  setRequestPanelWidth: (width: number) => void;
+
   // Import/Export
   importCollection: (collection: Collection) => void;
   exportCollection: (id: string) => Collection | null;
@@ -588,6 +592,16 @@ export const useAppStore = create<AppStore>()(
           if (result.found) {
             state.collections[collectionIndex].folders = result.folders;
             state.collections[collectionIndex].requests = result.requests;
+
+            // If the request name was updated, update any open tabs
+            if (updates.name) {
+              state.tabs = state.tabs.map(tab => {
+                if (tab.type === 'request' && tab.requestId === requestId) {
+                  return { ...tab, title: updates.name!, isModified: false };
+                }
+                return tab;
+              });
+            }
           }
         });
       },
@@ -891,6 +905,15 @@ export const useAppStore = create<AppStore>()(
         });
       },
 
+      // Panel widths
+      requestPanelWidth: 50, // percentage
+
+      setRequestPanelWidth: (width: number) => {
+        set(state => {
+          state.requestPanelWidth = width;
+        });
+      },
+
       // Import/Export
       importCollection: (collection: Collection) => {
         set(state => {
@@ -918,6 +941,7 @@ export const useAppStore = create<AppStore>()(
         history: state.history,
         sidebarWidth: state.sidebarWidth,
         sidebarCollapsed: state.sidebarCollapsed,
+        requestPanelWidth: state.requestPanelWidth,
       }),
     }
   )

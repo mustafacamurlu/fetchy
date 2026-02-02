@@ -6,13 +6,14 @@ import { Collection } from '../types';
 
 interface ImportModalProps {
   onClose: () => void;
+  initialImportType?: ImportType;
 }
 
-type ImportType = 'postman' | 'openapi' | 'aki' | 'curl';
+type ImportType = 'postman' | 'openapi' | 'curl';
 
-export default function ImportModal({ onClose }: ImportModalProps) {
+export default function ImportModal({ onClose, initialImportType = 'postman' }: ImportModalProps) {
   const { importCollection, addCollection, addRequest, openTab } = useAppStore();
-  const [importType, setImportType] = useState<ImportType>('postman');
+  const [importType, setImportType] = useState<ImportType>(initialImportType);
   const [fileContent, setFileContent] = useState<string>('');
   const [fileName, setFileName] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
@@ -80,18 +81,6 @@ export default function ImportModal({ onClose }: ImportModalProps) {
         collection = importPostmanCollection(fileContent);
       } else if (importType === 'openapi') {
         collection = importOpenAPISpec(fileContent);
-      } else if (importType === 'aki') {
-        // Aki native format - direct JSON parse
-        try {
-          const parsed = JSON.parse(fileContent);
-          if (parsed.name && (parsed.requests || parsed.folders)) {
-            collection = parsed as Collection;
-          } else {
-            throw new Error('Invalid Aki collection format');
-          }
-        } catch {
-          throw new Error('Invalid Aki collection JSON');
-        }
       }
 
       if (collection) {
@@ -108,11 +97,6 @@ export default function ImportModal({ onClose }: ImportModalProps) {
     }
   };
 
-  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    const pastedContent = e.clipboardData.getData('text');
-    setFileContent(pastedContent);
-    setFileName('Pasted content');
-  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center modal-backdrop">
@@ -133,7 +117,7 @@ export default function ImportModal({ onClose }: ImportModalProps) {
           {/* Import type selection */}
           <div className="mb-6">
             <label className="block text-sm text-aki-text-muted mb-2">Import Type</label>
-            <div className="grid grid-cols-4 gap-3">
+            <div className="grid grid-cols-3 gap-3">
               <button
                 onClick={() => setImportType('postman')}
                 className={`p-3 border rounded-lg flex flex-col items-center gap-2 transition-colors ${
@@ -160,20 +144,6 @@ export default function ImportModal({ onClose }: ImportModalProps) {
                 <div className="text-center">
                   <div className="font-medium text-aki-text text-sm">OpenAPI</div>
                   <div className="text-xs text-aki-text-muted">JSON/YAML</div>
-                </div>
-              </button>
-              <button
-                onClick={() => setImportType('aki')}
-                className={`p-3 border rounded-lg flex flex-col items-center gap-2 transition-colors ${
-                  importType === 'aki'
-                    ? 'border-aki-accent bg-aki-accent/10'
-                    : 'border-aki-border hover:border-aki-accent/50'
-                }`}
-              >
-                <FileJson className={`w-6 h-6 ${importType === 'aki' ? 'text-aki-accent' : 'text-blue-400'}`} />
-                <div className="text-center">
-                  <div className="font-medium text-aki-text text-sm">Aki</div>
-                  <div className="text-xs text-aki-text-muted">Native</div>
                 </div>
               </button>
               <button
@@ -234,15 +204,12 @@ export default function ImportModal({ onClose }: ImportModalProps) {
                 setFileContent(e.target.value);
                 setFileName(e.target.value ? 'Pasted content' : '');
               }}
-              onPaste={handlePaste}
               placeholder={
                 importType === 'curl'
                   ? 'curl -X POST "https://api.example.com/data" -H "Content-Type: application/json" -d \'{"key": "value"}\''
                   : importType === 'postman'
                     ? 'Paste your Postman collection here...'
-                    : importType === 'openapi'
-                      ? 'Paste your OpenAPI spec here...'
-                      : 'Paste your Aki collection here...'
+                    : 'Paste your OpenAPI spec here...'
               }
               className={`w-full resize-none font-mono text-sm ${importType === 'curl' ? 'h-48' : 'h-32'}`}
             />

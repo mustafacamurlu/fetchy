@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Copy, Check, Send, ArrowDown } from 'lucide-react';
+import { Send, ArrowDown } from 'lucide-react';
 import { ApiResponse, ApiRequest } from '../types';
 import { formatBytes, formatTime, getStatusColor, prettyPrintJson, getMethodBgColor } from '../utils/helpers';
 import CodeEditor from './CodeEditor';
@@ -12,14 +12,6 @@ interface ResponsePanelProps {
 
 export default function ResponsePanel({ response, sentRequest, isLoading }: ResponsePanelProps) {
   const [activeTab, setActiveTab] = useState<'response-body' | 'response-headers' | 'request-headers' | 'request-body'>('response-body');
-  const [copied, setCopied] = useState(false);
-
-  const copyToClipboard = async () => {
-    if (!response) return;
-    await navigator.clipboard.writeText(response.body);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
 
   if (isLoading) {
     return (
@@ -96,14 +88,6 @@ export default function ResponsePanel({ response, sentRequest, isLoading }: Resp
             <span className="text-sm text-aki-text-muted">Size:</span>
             <span className="text-sm text-aki-text">{formatBytes(response.size)}</span>
           </div>
-          <div className="flex-1" />
-          <button
-            onClick={copyToClipboard}
-            className="btn btn-secondary flex items-center gap-2 text-sm"
-          >
-            {copied ? <Check size={14} /> : <Copy size={14} />}
-            {copied ? 'Copied!' : 'Copy'}
-          </button>
         </div>
       </div>
 

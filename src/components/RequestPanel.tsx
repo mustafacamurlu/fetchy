@@ -224,7 +224,13 @@ export default function RequestPanel({ setResponse, setSentRequest, setIsLoading
 
     return (
       <div className="h-full flex flex-col">
-        <div className="flex items-center justify-end gap-2 p-2 border-b border-aki-border">
+        <div className="flex items-center justify-between gap-2 p-2 border-b border-aki-border">
+          <button
+            onClick={() => addKeyValue(field)}
+            className="flex items-center gap-1 px-2 py-1 text-xs text-aki-text-muted hover:text-aki-text hover:bg-aki-border rounded"
+          >
+            <Plus size={14} /> Add {field === 'headers' ? 'Header' : 'Parameter'}
+          </button>
           <button
             onClick={() => openBatchEdit(field)}
             className="flex items-center gap-1 px-2 py-1 text-xs text-aki-text-muted hover:text-aki-text hover:bg-aki-border rounded"
@@ -284,12 +290,6 @@ export default function RequestPanel({ setResponse, setSentRequest, setIsLoading
             </tbody>
           </table>
         </div>
-        <button
-          onClick={() => addKeyValue(field)}
-          className="flex items-center gap-1 px-3 py-2 text-sm text-aki-text-muted hover:text-aki-text shrink-0 border-t border-aki-border"
-        >
-          <Plus size={14} /> Add {field === 'headers' ? 'Header' : 'Parameter'}
-        </button>
       </div>
     );
   };
@@ -664,17 +664,6 @@ export default function RequestPanel({ setResponse, setSentRequest, setIsLoading
 
   return (
     <div className="h-full flex flex-col bg-aki-bg">
-      {/* Request name */}
-      <div className="px-4 py-2 border-b border-aki-border">
-        <input
-          type="text"
-          value={request.name}
-          onChange={(e) => handleChange({ name: e.target.value })}
-          className="w-full bg-transparent text-lg font-medium outline-none"
-          placeholder="Request name"
-        />
-      </div>
-
       {/* URL bar */}
       <div className="px-4 py-3 border-b border-aki-border flex items-center gap-2">
         <select
@@ -710,40 +699,43 @@ export default function RequestPanel({ setResponse, setSentRequest, setIsLoading
             </>
           )}
         </button>
-
-        <button
-          onClick={handleSave}
-          className="btn btn-secondary flex items-center gap-2"
-        >
-          <Save size={16} />
-        </button>
       </div>
 
-      {/* Section tabs */}
-      <div className="flex border-b border-aki-border shrink-0">
-        {[
-          { id: 'params', label: 'Params', count: request.params.filter(p => p.enabled).length },
-          { id: 'headers', label: 'Headers', count: request.headers.filter(h => h.enabled).length },
-          { id: 'body', label: 'Body' },
-          { id: 'auth', label: 'Auth' },
-        ].map((section) => (
-          <button
-            key={section.id}
-            onClick={() => setActiveSection(section.id as any)}
-            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-              activeSection === section.id
-                ? 'border-aki-accent text-aki-accent'
-                : 'border-transparent text-aki-text-muted hover:text-aki-text'
-            }`}
-          >
-            {section.label}
-            {section.count !== undefined && section.count > 0 && (
-              <span className="ml-1 px-1.5 py-0.5 text-xs bg-aki-accent/20 text-aki-accent rounded">
-                {section.count}
-              </span>
-            )}
-          </button>
-        ))}
+      {/* Section tabs with Save button */}
+      <div className="flex items-center border-b border-aki-border shrink-0">
+        <div className="flex flex-1">
+          {[
+            { id: 'params', label: 'Params', count: request.params.filter(p => p.enabled).length },
+            { id: 'headers', label: 'Headers', count: request.headers.filter(h => h.enabled).length },
+            { id: 'body', label: 'Body' },
+            { id: 'auth', label: 'Auth' },
+          ].map((section) => (
+            <button
+              key={section.id}
+              onClick={() => setActiveSection(section.id as any)}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeSection === section.id
+                  ? 'border-aki-accent text-aki-accent'
+                  : 'border-transparent text-aki-text-muted hover:text-aki-text'
+              }`}
+            >
+              {section.label}
+              {section.count !== undefined && section.count > 0 && (
+                <span className="ml-1 px-1.5 py-0.5 text-xs bg-aki-accent/20 text-aki-accent rounded">
+                  {section.count}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+        <button
+          onClick={handleSave}
+          className="px-4 py-2 text-sm font-medium text-aki-text-muted hover:text-aki-text hover:bg-aki-border transition-colors flex items-center gap-1"
+          title="Save Request"
+        >
+          <Save size={16} />
+          Save
+        </button>
       </div>
 
       {/* Section content */}

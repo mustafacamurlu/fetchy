@@ -21,8 +21,6 @@
 
 ---
 
-## [🗒️ Medium Article: Fetchy — A Reliable Offline REST Client for Modern Developers](https://medium.com/@akineralkan/fetchy-a-reliable-offline-rest-client-for-modern-developers-833046105004)
-
 ## 🔒 Privacy First - Self-Hosted & Offline
 
 **Fetchy is designed with privacy at its core.** Unlike cloud-based alternatives, Fetchy:
@@ -166,7 +164,7 @@
 
 #### Windows Portable
 Download the portable version (no installation required):
-- 📦 [**Fetchy Portable for Windows**](https://github.com/AkinerAlkan94/fetchy/releases/tag/v.1.0.0)
+- 📦 [**Fetchy Portable for Windows**](./portable-binary/Fetchy-Portable.zip)
 
 Simply extract and run - no installation needed!
 
@@ -262,11 +260,14 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## 📋 Roadmap
 
+- [ ] WebSocket support
+- [ ] GraphQL support
 - [ ] Pre-request and test scripts
 - [ ] Response assertions
 - [ ] Request chaining
 - [ ] Theme customization (Light theme)
 - [ ] Request documentation/notes
+- [ ] Code generation (cURL, JavaScript, Python, etc.)
 
 ---
 
@@ -291,7 +292,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 <p align="center">
   Made with ❤️ for developers who care about privacy
 </p>
-
-
-
 

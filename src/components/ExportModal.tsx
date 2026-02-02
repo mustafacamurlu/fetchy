@@ -13,7 +13,6 @@ export default function ExportModal({ onClose, collectionId }: ExportModalProps)
   const [selectedCollectionId, setSelectedCollectionId] = useState<string>(
     collectionId || (collections.length > 0 ? collections[0].id : '')
   );
-  const [exportFormat, setExportFormat] = useState<'postman' | 'aki'>('postman');
   const [success, setSuccess] = useState<string | null>(null);
 
   const selectedCollection = collections.find(c => c.id === selectedCollectionId);
@@ -21,17 +20,8 @@ export default function ExportModal({ onClose, collectionId }: ExportModalProps)
   const handleExport = () => {
     if (!selectedCollection) return;
 
-    let content: string;
-    let filename: string;
-
-    if (exportFormat === 'postman') {
-      content = exportToPostman(selectedCollection);
-      filename = `${selectedCollection.name.replace(/\s+/g, '_')}.postman_collection.json`;
-    } else {
-      // Aki native format (JSON with all data)
-      content = JSON.stringify(selectedCollection, null, 2);
-      filename = `${selectedCollection.name.replace(/\s+/g, '_')}.aki.json`;
-    }
+    const content = exportToPostman(selectedCollection);
+    const filename = `${selectedCollection.name.replace(/\s+/g, '_')}.postman_collection.json`;
 
     // Create download
     const blob = new Blob([content], { type: 'application/json' });
@@ -89,38 +79,15 @@ export default function ExportModal({ onClose, collectionId }: ExportModalProps)
                 </select>
               </div>
 
-              {/* Export format selection */}
+              {/* Export format info */}
               <div className="mb-6">
                 <label className="block text-sm text-aki-text-muted mb-2">Export Format</label>
-                <div className="flex gap-4">
-                  <button
-                    onClick={() => setExportFormat('postman')}
-                    className={`flex-1 p-4 border rounded-lg flex items-center gap-3 transition-colors ${
-                      exportFormat === 'postman'
-                        ? 'border-aki-accent bg-aki-accent/10'
-                        : 'border-aki-border hover:border-aki-accent/50'
-                    }`}
-                  >
-                    <FileJson className={`w-6 h-6 ${exportFormat === 'postman' ? 'text-aki-accent' : 'text-orange-400'}`} />
-                    <div className="text-left">
-                      <div className="font-medium text-aki-text">Postman</div>
-                      <div className="text-xs text-aki-text-muted">v2.1 compatible</div>
-                    </div>
-                  </button>
-                  <button
-                    onClick={() => setExportFormat('aki')}
-                    className={`flex-1 p-4 border rounded-lg flex items-center gap-3 transition-colors ${
-                      exportFormat === 'aki'
-                        ? 'border-aki-accent bg-aki-accent/10'
-                        : 'border-aki-border hover:border-aki-accent/50'
-                    }`}
-                  >
-                    <FileJson className={`w-6 h-6 ${exportFormat === 'aki' ? 'text-aki-accent' : 'text-blue-400'}`} />
-                    <div className="text-left">
-                      <div className="font-medium text-aki-text">Aki Native</div>
-                      <div className="text-xs text-aki-text-muted">Full backup</div>
-                    </div>
-                  </button>
+                <div className="p-4 border rounded-lg border-aki-accent bg-aki-accent/10 flex items-center gap-3">
+                  <FileJson className="w-6 h-6 text-aki-accent" />
+                  <div className="text-left">
+                    <div className="font-medium text-aki-text">Postman</div>
+                    <div className="text-xs text-aki-text-muted">v2.1 compatible</div>
+                  </div>
                 </div>
               </div>
 

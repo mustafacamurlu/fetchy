@@ -23,6 +23,7 @@ import {
   FilePlus,
   ChevronRight,
   ChevronDown,
+  ChevronUp,
   Folder,
   MoreVertical,
   Trash2,
@@ -32,8 +33,8 @@ import {
   History,
   Clock,
   Download,
+  Upload,
   Key,
-  Search,
   Filter,
   ArrowUpDown,
   GripVertical,
@@ -90,7 +91,10 @@ function SortableCollectionItem({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: `collection-${collection.id}` });
+  } = useSortable({
+    id: `collection-${collection.id}`,
+    data: { type: 'collection', collectionId: collection.id, collection }
+  });
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -159,6 +163,11 @@ function SortableRequestItem({
   depth,
   onClick,
   onContextMenu,
+  editingId,
+  editingName,
+  setEditingName,
+  inputRef,
+  onEditComplete,
 }: {
   request: ApiRequest;
   collectionId: string;
@@ -166,6 +175,11 @@ function SortableRequestItem({
   depth: number;
   onClick: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
+  editingId: string | null;
+  editingName: string;
+  setEditingName: (name: string) => void;
+  inputRef: React.RefObject<HTMLInputElement>;
+  onEditComplete: () => void;
 }) {
   const {
     attributes,
@@ -205,7 +219,23 @@ function SortableRequestItem({
       <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${getMethodBgColor(request.method)}`}>
         {request.method.substring(0, 3)}
       </span>
-      <span className="text-sm text-aki-text truncate flex-1">{request.name}</span>
+      {editingId === request.id ? (
+        <input
+          ref={inputRef}
+          type="text"
+          value={editingName}
+          onChange={(e) => setEditingName(e.target.value)}
+          onClick={(e) => e.stopPropagation()}
+          onBlur={onEditComplete}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') onEditComplete();
+            if (e.key === 'Escape') onEditComplete();
+          }}
+          className="flex-1 px-2 py-1 text-sm bg-aki-bg border border-aki-accent rounded outline-none"
+        />
+      ) : (
+        <span className="text-sm text-aki-text truncate flex-1">{request.name}</span>
+      )}
       <button
         className="opacity-0 group-hover:opacity-100 p-1 hover:bg-aki-border rounded"
         onClick={(e) => {
@@ -321,6 +351,7 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
   const {
     collections,
     addCollection,
+    updateCollection,
     deleteCollection,
     toggleCollectionExpanded,
     addFolder,
@@ -328,6 +359,7 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
     deleteFolder,
     toggleFolderExpanded,
     addRequest,
+    updateRequest,
     deleteRequest,
     duplicateRequest,
     openTab,
@@ -703,6 +735,40 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
     URL.revokeObjectURL(url);
   };
 
+  const expandAllFolders = (folders: RequestFolder[]): RequestFolder[] => {
+    return folders.map(folder => ({
+      ...folder,
+      expanded: true,
+      folders: expandAllFolders(folder.folders),
+    }));
+  };
+
+  const collapseAllFolders = (folders: RequestFolder[]): RequestFolder[] => {
+    return folders.map(folder => ({
+      ...folder,
+      expanded: false,
+      folders: collapseAllFolders(folder.folders),
+    }));
+  };
+
+  const handleExpandAll = () => {
+    collections.forEach(collection => {
+      updateCollection(collection.id, {
+        expanded: true,
+        folders: expandAllFolders(collection.folders),
+      });
+    });
+  };
+
+  const handleCollapseAll = () => {
+    collections.forEach(collection => {
+      updateCollection(collection.id, {
+        expanded: false,
+        folders: collapseAllFolders(collection.folders),
+      });
+    });
+  };
+
   const renderFolder = (collectionId: string, folder: RequestFolder, depth: number) => {
     const folderRequests = folder.requests;
     const folderFolders = folder.folders;
@@ -738,6 +804,14 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
                 depth={depth + 1}
                 onClick={() => handleRequestClick(collectionId, request, folder.id)}
                 onContextMenu={(e) => handleContextMenu(e, 'request', collectionId, folder.id, request.id)}
+                editingId={editingId}
+                editingName={editingName}
+                setEditingName={setEditingName}
+                inputRef={inputRef}
+                onEditComplete={() => {
+                  updateRequest(collectionId, request.id, { name: editingName });
+                  setEditingId(null);
+                }}
               />
             ))}
           </SortableContext>
@@ -778,6 +852,14 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
                 depth={1}
                 onClick={() => handleRequestClick(collection.id, request)}
                 onContextMenu={(e) => handleContextMenu(e, 'request', collection.id, undefined, request.id)}
+                editingId={editingId}
+                editingName={editingName}
+                setEditingName={setEditingName}
+                inputRef={inputRef}
+                onEditComplete={() => {
+                  updateRequest(collection.id, request.id, { name: editingName });
+                  setEditingId(null);
+                }}
               />
             ))}
           </SortableContext>
@@ -868,13 +950,12 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
         <div className="p-2 border-b border-aki-border">
           <div className="flex items-center gap-2">
             <div className="flex-1 relative">
-              <Search size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-aki-text-muted" />
               <input
                 type="text"
                 placeholder="Search requests..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-7 pr-7 py-1.5 text-sm bg-aki-bg border border-aki-border rounded focus:outline-none focus:border-aki-accent"
+                className="w-full pl-3 pr-7 py-1.5 text-sm bg-aki-bg border border-aki-border rounded focus:outline-none focus:border-aki-accent"
               />
               {searchQuery && (
                 <button
@@ -885,6 +966,27 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
                 </button>
               )}
             </div>
+            <button
+              onClick={handleExpandAll}
+              className="p-1.5 rounded border border-aki-border text-aki-text-muted hover:text-aki-text hover:bg-aki-border"
+              title="Expand All"
+            >
+              <ChevronDown size={14} />
+            </button>
+            <button
+              onClick={handleCollapseAll}
+              className="p-1.5 rounded border border-aki-border text-aki-text-muted hover:text-aki-text hover:bg-aki-border"
+              title="Collapse All"
+            >
+              <ChevronUp size={14} />
+            </button>
+            <button
+              onClick={onImport}
+              className="p-1.5 rounded border border-aki-border text-aki-text-muted hover:text-aki-text hover:bg-aki-border"
+              title="Import Collection"
+            >
+              <Upload size={14} />
+            </button>
             <div className="relative">
               <button
                 onClick={() => setShowFilterMenu(!showFilterMenu)}
@@ -1196,6 +1298,37 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
                   }}
                 >
                   <Copy size={14} /> Duplicate
+                </button>
+                <button
+                  className="w-full px-3 py-2 text-left text-sm hover:bg-aki-border flex items-center gap-2"
+                  onClick={() => {
+                    // Find the request to edit
+                    const collection = collections.find(c => c.id === contextMenu.collectionId);
+                    if (collection) {
+                      const findRequest = (folders: typeof collection.folders, requests: typeof collection.requests): ApiRequest | null => {
+                        // Check in root requests
+                        const request = requests.find(r => r.id === contextMenu.requestId);
+                        if (request) return request;
+
+                        // Check in folders
+                        for (const folder of folders) {
+                          const folderRequest = findRequest(folder.folders, folder.requests);
+                          if (folderRequest) return folderRequest;
+                        }
+                        return null;
+                      };
+
+                      const request = findRequest(collection.folders, collection.requests);
+                      if (request) {
+                        setEditingId(request.id);
+                        setEditingName(request.name);
+                        closeContextMenu();
+                        setTimeout(() => inputRef.current?.focus(), 0);
+                      }
+                    }
+                  }}
+                >
+                  <Edit2 size={14} /> Rename
                 </button>
                 {collections.length > 1 && (
                   <div className="relative">

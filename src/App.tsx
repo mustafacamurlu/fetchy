@@ -1,5 +1,5 @@
-import { useState, useCallback, useEffect } from 'react';
-import { HelpCircle, Settings } from 'lucide-react';
+import { useState, useCallback, useEffect, useRef } from 'react';
+import { HelpCircle, Settings, RefreshCw } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import TabBar from './components/TabBar';
 import RequestPanel from './components/RequestPanel';
@@ -8,24 +8,46 @@ import WelcomeScreen from './components/WelcomeScreen';
 import ImportModal from './components/ImportModal';
 import ExportModal from './components/ExportModal';
 import EnvironmentModal from './components/EnvironmentModal';
+import EnvironmentDropdown from './components/EnvironmentDropdown';
 import KeyboardShortcutsModal from './components/KeyboardShortcutsModal';
 import SettingsModal from './components/SettingsModal';
+import UpdateModal from './components/UpdateModal';
+import ThemeToggle from './components/ThemeToggle';
+import ResizeHandle from './components/ResizeHandle';
 import { useAppStore } from './store/appStore';
 import { usePreferencesStore } from './store/preferencesStore';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { ApiResponse, RequestHistoryItem, ApiRequest } from './types';
 
+type ImportType = 'postman' | 'openapi' | 'curl';
+
 function App() {
-  const { tabs, activeTabId, sidebarWidth, sidebarCollapsed, collections, addCollection, addRequest, openTab, getActiveEnvironment } = useAppStore();
+  const {
+    tabs,
+    activeTabId,
+    sidebarWidth,
+    sidebarCollapsed,
+    collections,
+    addCollection,
+    addRequest,
+    openTab,
+    setSidebarWidth,
+    requestPanelWidth,
+    setRequestPanelWidth,
+  } = useAppStore();
   const { loadPreferences } = usePreferencesStore();
   const [response, setResponse] = useState<ApiResponse | null>(null);
   const [sentRequest, setSentRequest] = useState<ApiRequest | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
+  const [importType, setImportType] = useState<ImportType>('postman');
   const [showExportModal, setShowExportModal] = useState(false);
   const [showEnvironmentModal, setShowEnvironmentModal] = useState(false);
   const [showShortcutsModal, setShowShortcutsModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showUpdateModal, setShowUpdateModal] = useState(false);
+
+  const mainPanelRef = useRef<HTMLDivElement>(null);
 
   // Load preferences on mount
   useEffect(() => {
@@ -34,8 +56,6 @@ function App() {
 
   const activeTab = tabs.find(t => t.id === activeTabId);
   const hasActiveRequest = activeTab?.type === 'request';
-
-  const activeEnvironment = getActiveEnvironment();
 
   const handleHistoryItemClick = useCallback((item: RequestHistoryItem) => {
     // Just set the response and sent request from history to display them
@@ -67,6 +87,28 @@ function App() {
     }
   }, [collections, addCollection, addRequest, openTab]);
 
+  const handleImport = useCallback((type?: ImportType) => {
+    if (type) {
+      setImportType(type);
+    }
+    setShowImportModal(true);
+  }, []);
+
+  // Resize handlers
+  const handleSidebarResize = useCallback((delta: number) => {
+    const newWidth = Math.max(200, Math.min(600, sidebarWidth + delta));
+    setSidebarWidth(newWidth);
+  }, [sidebarWidth, setSidebarWidth]);
+
+  const handleRequestPanelResize = useCallback((delta: number) => {
+    if (!mainPanelRef.current) return;
+    const containerWidth = mainPanelRef.current.offsetWidth;
+    const pixelWidth = (requestPanelWidth / 100) * containerWidth;
+    const newPixelWidth = Math.max(200, Math.min(containerWidth - 200, pixelWidth + delta));
+    const newPercentage = (newPixelWidth / containerWidth) * 100;
+    setRequestPanelWidth(newPercentage);
+  }, [requestPanelWidth, setRequestPanelWidth]);
+
   // Set up keyboard shortcuts
   useKeyboardShortcuts([
     {
@@ -78,7 +120,7 @@ function App() {
     {
       key: 'i',
       ctrl: true,
-      handler: () => setShowImportModal(true),
+      handler: () => handleImport(),
       description: 'Import',
     },
     {
@@ -103,43 +145,17 @@ function App() {
           <img src="./logo.jpg" alt="Fetchy" className="h-8 w-8 rounded" />
           <div className="text-xl font-bold text-aki-accent">Fetchy</div>
           <span className="text-xs text-aki-text-muted italic">Local by design. Reliable by nature</span>
-          <span className="text-xs text-aki-text-muted">v1.0.0</span>
+          <span className="text-xs text-aki-text-muted">v1.1.0</span>
         </div>
         <div className="flex items-center gap-2">
-          {activeEnvironment && (
-            <div className="flex items-center gap-2 px-3 py-1 bg-green-500/20 rounded text-sm text-green-400">
-              <span className="w-2 h-2 bg-green-400 rounded-full" />
-              {activeEnvironment.name}
-            </div>
-          )}
+          <EnvironmentDropdown onOpenSettings={() => setShowEnvironmentModal(true)} />
+          <ThemeToggle />
           <button
-            onClick={handleNewRequest}
-            className="btn btn-secondary text-sm"
-            title="New Request (Ctrl+N)"
+            onClick={() => setShowUpdateModal(true)}
+            className="p-2 hover:bg-aki-border rounded text-aki-text-muted hover:text-aki-text"
+            title="Check for Updates"
           >
-            New Request
-          </button>
-          <button
-            onClick={() => setShowImportModal(true)}
-            className="btn btn-secondary text-sm"
-            title="Import (Ctrl+I)"
-          >
-            Import
-          </button>
-          <button
-            onClick={() => setShowExportModal(true)}
-            className="btn btn-secondary text-sm"
-            title="Export"
-            disabled={collections.length === 0}
-          >
-            Export
-          </button>
-          <button
-            onClick={() => setShowEnvironmentModal(true)}
-            className="btn btn-secondary text-sm"
-            title="Environments (Ctrl+E)"
-          >
-            Environments
+            <RefreshCw size={18} />
           </button>
           <button
             onClick={() => setShowShortcutsModal(true)}
@@ -166,13 +182,21 @@ function App() {
           className="shrink-0 transition-all duration-200 overflow-hidden"
         >
           <Sidebar
-            onImport={() => setShowImportModal(true)}
+            onImport={() => handleImport()}
             onHistoryItemClick={handleHistoryItemClick}
           />
         </div>
 
+        {/* Sidebar resize handle */}
+        {!sidebarCollapsed && (
+          <ResizeHandle
+            direction="horizontal"
+            onResize={handleSidebarResize}
+          />
+        )}
+
         {/* Main panel */}
-        <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex-1 flex flex-col overflow-hidden" ref={mainPanelRef}>
           {/* Tab bar */}
           <TabBar />
 
@@ -180,7 +204,10 @@ function App() {
           {hasActiveRequest ? (
             <div className="flex-1 flex overflow-hidden">
               {/* Request panel */}
-              <div className="w-1/2 border-r border-aki-border overflow-hidden">
+              <div
+                style={{ width: `${requestPanelWidth}%` }}
+                className="shrink-0 overflow-hidden"
+              >
                 <RequestPanel
                   setResponse={setResponse}
                   setSentRequest={setSentRequest}
@@ -189,8 +216,14 @@ function App() {
                 />
               </div>
 
+              {/* Request/Response resize handle */}
+              <ResizeHandle
+                direction="horizontal"
+                onResize={handleRequestPanelResize}
+              />
+
               {/* Response panel */}
-              <div className="w-1/2 overflow-hidden">
+              <div className="flex-1 overflow-hidden">
                 <ResponsePanel
                   response={response}
                   sentRequest={sentRequest}
@@ -199,14 +232,17 @@ function App() {
               </div>
             </div>
           ) : (
-            <WelcomeScreen onImport={() => setShowImportModal(true)} />
+            <WelcomeScreen onImport={handleImport} />
           )}
         </div>
       </div>
 
       {/* Modals */}
       {showImportModal && (
-        <ImportModal onClose={() => setShowImportModal(false)} />
+        <ImportModal
+          onClose={() => setShowImportModal(false)}
+          initialImportType={importType}
+        />
       )}
 
       {showExportModal && (
@@ -227,9 +263,14 @@ function App() {
           onClose={() => setShowSettingsModal(false)}
         />
       )}
+
+      {showUpdateModal && (
+        <UpdateModal
+          onClose={() => setShowUpdateModal(false)}
+        />
+      )}
     </div>
   );
 }
 
 export default App;
-

@@ -153,10 +153,25 @@ const convertPostmanItems = (items: PostmanItem[]): { folders: RequestFolder[]; 
 // Import Postman collection
 export const importPostmanCollection = (content: string): Collection | null => {
   try {
-    const postman: PostmanCollection = JSON.parse(content);
+    // Trim whitespace from content
+    const trimmedContent = content.trim();
 
-    if (!postman.info || !postman.item) {
-      throw new Error('Invalid Postman collection format');
+    if (!trimmedContent) {
+      throw new Error('Empty content provided');
+    }
+
+    const postman: PostmanCollection = JSON.parse(trimmedContent);
+
+    if (!postman || typeof postman !== 'object') {
+      throw new Error('Invalid Postman collection: parsed content is not an object');
+    }
+
+    if (!postman.info) {
+      throw new Error('Invalid Postman collection format: missing "info" field');
+    }
+
+    if (!postman.item) {
+      throw new Error('Invalid Postman collection format: missing "item" field');
     }
 
     const { folders, requests } = convertPostmanItems(postman.item);
@@ -179,7 +194,7 @@ export const importPostmanCollection = (content: string): Collection | null => {
     };
   } catch (error) {
     console.error('Error importing Postman collection:', error);
-    return null;
+    throw error; // Re-throw to provide better error messages to the user
   }
 };
 
@@ -250,17 +265,47 @@ const convertOpenAPIOperation = (
 // Import OpenAPI specification
 export const importOpenAPISpec = (content: string): Collection | null => {
   try {
+    // Trim whitespace from content
+    const trimmedContent = content.trim();
+
+    if (!trimmedContent) {
+      throw new Error('Empty content provided');
+    }
+
     let spec: OpenAPISpec;
+    let parseError: Error | null = null;
 
     // Try to parse as JSON first, then YAML
     try {
-      spec = JSON.parse(content);
-    } catch {
-      spec = yaml.load(content) as OpenAPISpec;
+      spec = JSON.parse(trimmedContent);
+    } catch (jsonError) {
+      parseError = jsonError as Error;
+      try {
+        const parsed = yaml.load(trimmedContent);
+        if (!parsed || typeof parsed !== 'object') {
+          throw new Error('YAML parsing returned invalid data');
+        }
+        spec = parsed as OpenAPISpec;
+      } catch (yamlError) {
+        throw new Error(`Failed to parse as JSON or YAML. JSON error: ${parseError.message}`);
+      }
+    }
+
+    // Validate required fields
+    if (!spec || typeof spec !== 'object') {
+      throw new Error('Invalid OpenAPI specification: parsed content is not an object');
+    }
+
+    if (!spec.info) {
+      throw new Error('Invalid OpenAPI specification: missing "info" field');
     }
 
     if (!spec.paths) {
       throw new Error('Invalid OpenAPI specification: no paths found');
+    }
+
+    if (typeof spec.paths !== 'object' || Object.keys(spec.paths).length === 0) {
+      throw new Error('Invalid OpenAPI specification: paths object is empty');
     }
 
     const baseUrl = spec.servers?.[0]?.url || '';
@@ -271,8 +316,10 @@ export const importOpenAPISpec = (content: string): Collection | null => {
     const untaggedRequests: ApiRequest[] = [];
 
     for (const [path, methods] of Object.entries(spec.paths)) {
+      if (!methods || typeof methods !== 'object') continue;
+
       for (const [method, operation] of Object.entries(methods)) {
-        if (['get', 'post', 'put', 'patch', 'delete', 'head', 'options'].includes(method)) {
+        if (['get', 'post', 'put', 'patch', 'delete', 'head', 'options'].includes(method.toLowerCase())) {
           const request = convertOpenAPIOperation(path, method, operation as OpenAPIOperation, baseUrl);
 
           const tags = (operation as OpenAPIOperation).tags;
@@ -311,7 +358,7 @@ export const importOpenAPISpec = (content: string): Collection | null => {
     };
   } catch (error) {
     console.error('Error importing OpenAPI spec:', error);
-    return null;
+    throw error; // Re-throw to provide better error messages to the user
   }
 };
 
@@ -1010,15 +1057,15 @@ export const getMethodColor = (method: HttpMethod): string => {
 // Get method background color
 export const getMethodBgColor = (method: HttpMethod): string => {
   const colors: Record<HttpMethod, string> = {
-    GET: 'bg-green-500/20 text-green-400',
-    POST: 'bg-yellow-500/20 text-yellow-400',
-    PUT: 'bg-blue-500/20 text-blue-400',
-    PATCH: 'bg-purple-500/20 text-purple-400',
-    DELETE: 'bg-red-500/20 text-red-400',
-    HEAD: 'bg-gray-500/20 text-gray-400',
-    OPTIONS: 'bg-pink-500/20 text-pink-400',
+    GET: 'method-get',
+    POST: 'method-post',
+    PUT: 'method-put',
+    PATCH: 'method-patch',
+    DELETE: 'method-delete',
+    HEAD: 'method-head',
+    OPTIONS: 'method-options',
   };
-  return colors[method] || 'bg-gray-500/20 text-gray-400';
+  return colors[method] || 'method-head';
 };
 
 // Get status color

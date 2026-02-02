@@ -124,7 +124,7 @@ export default function VariableTextarea({ value, onChange, placeholder, classNa
       parts.push(
         <span
           key={`var-${keyIndex++}`}
-          className={`whitespace-pre ${isDefined ? (isSecret ? 'text-orange-400' : 'text-green-400') : 'text-yellow-400'}`}
+          className={`whitespace-pre ${isDefined ? (isSecret ? 'var-highlight-secret' : 'var-highlight-defined') : 'var-highlight-undefined'}`}
         >
           {match[0]}
         </span>

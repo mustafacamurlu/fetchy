@@ -1,8 +1,11 @@
-import { Zap, FolderOpen, FileJson } from 'lucide-react';
+import { Zap, FolderOpen, FileJson, Terminal } from 'lucide-react';
 import { useAppStore } from '../store/appStore';
+import Confetti from './Confetti';
+
+type ImportType = 'postman' | 'openapi' | 'curl';
 
 interface WelcomeScreenProps {
-  onImport: () => void;
+  onImport: (type?: ImportType) => void;
 }
 
 export default function WelcomeScreen({ onImport }: WelcomeScreenProps) {
@@ -24,9 +27,17 @@ export default function WelcomeScreen({ onImport }: WelcomeScreenProps) {
   };
 
   return (
-    <div className="h-full flex flex-col items-center justify-center bg-aki-bg p-8">
-      <div className="text-center max-w-2xl">
-        <img src="./logo.jpg" alt="Fetchy" className="w-32 h-32 rounded-xl mx-auto mb-6 shadow-lg" />
+    <div className="h-full flex flex-col items-center justify-center bg-aki-bg p-8 relative overflow-hidden">
+      <Confetti />
+      <div className="text-center max-w-2xl relative z-20">
+        <div className="relative inline-block mb-6">
+          <img
+            src="./fetchy_readme_logo.jpg"
+            alt="Fetchy"
+            className="w-48 h-48 rounded-xl mx-auto shadow-2xl transform hover:scale-105 transition-transform duration-300"
+          />
+          <div className="absolute inset-0 rounded-xl bg-gradient-to-br from-aki-accent/20 to-transparent pointer-events-none"></div>
+        </div>
         <h1 className="text-3xl font-bold text-aki-text mb-2">
           Welcome to Fetchy
         </h1>
@@ -36,7 +47,7 @@ export default function WelcomeScreen({ onImport }: WelcomeScreenProps) {
           Import collections from Postman or OpenAPI specs, or start fresh.
         </p>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
           <button
             onClick={handleQuickStart}
             className="p-6 bg-aki-card border border-aki-border rounded-lg hover:border-aki-accent transition-colors group"
@@ -49,7 +60,7 @@ export default function WelcomeScreen({ onImport }: WelcomeScreenProps) {
           </button>
 
           <button
-            onClick={onImport}
+            onClick={() => onImport('postman')}
             className="p-6 bg-aki-card border border-aki-border rounded-lg hover:border-aki-accent transition-colors group"
           >
             <FolderOpen className="w-8 h-8 text-yellow-400 mx-auto mb-3 group-hover:scale-110 transition-transform" />
@@ -60,7 +71,7 @@ export default function WelcomeScreen({ onImport }: WelcomeScreenProps) {
           </button>
 
           <button
-            onClick={onImport}
+            onClick={() => onImport('openapi')}
             className="p-6 bg-aki-card border border-aki-border rounded-lg hover:border-aki-accent transition-colors group"
           >
             <FileJson className="w-8 h-8 text-green-400 mx-auto mb-3 group-hover:scale-110 transition-transform" />
@@ -69,36 +80,17 @@ export default function WelcomeScreen({ onImport }: WelcomeScreenProps) {
               Generate requests from OpenAPI/Swagger specs
             </p>
           </button>
-        </div>
 
-        <div className="bg-aki-card/50 border border-aki-border rounded-lg p-6">
-          <h3 className="font-medium text-aki-text mb-4">Features</h3>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm text-aki-text-muted">
-            <div className="flex items-center gap-2">
-              <span className="text-green-400">✓</span> REST Collections
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-green-400">✓</span> Environment Variables
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-green-400">✓</span> Multiple Auth Types
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-green-400">✓</span> Request History
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-green-400">✓</span> OpenAPI Import
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-green-400">✓</span> Postman Import
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-green-400">✓</span> JSON Editor
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-green-400">✓</span> Offline Support
-            </div>
-          </div>
+          <button
+            onClick={() => onImport('curl')}
+            className="p-6 bg-aki-card border border-aki-border rounded-lg hover:border-aki-accent transition-colors group"
+          >
+            <Terminal className="w-8 h-8 text-purple-400 mx-auto mb-3 group-hover:scale-110 transition-transform" />
+            <h3 className="font-medium text-aki-text mb-2">Import cURL</h3>
+            <p className="text-sm text-aki-text-muted">
+              Convert cURL commands to requests
+            </p>
+          </button>
         </div>
       </div>
     </div>

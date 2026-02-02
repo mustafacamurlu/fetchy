@@ -93,7 +93,7 @@ export default function VariableInput({ value, onChange, placeholder, className,
       parts.push(
         <span
           key={`var-${match.index}`}
-          className={isDefined ? (isSecret ? 'text-orange-400' : 'text-green-400') : 'text-yellow-400'}
+          className={isDefined ? (isSecret ? 'var-highlight-secret' : 'var-highlight-defined') : 'var-highlight-undefined'}
         >
           {match[0]}
         </span>
