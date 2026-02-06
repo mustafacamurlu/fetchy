@@ -37,7 +37,12 @@ export default function RequestPanel({ setResponse, setSentRequest, setIsLoading
   const [codeModal, setCodeModal] = useState<{ open: boolean; activeLanguage: string; copied: boolean }>({ open: false, activeLanguage: 'curl', copied: false });
   const [showCodeDropdown, setShowCodeDropdown] = useState(false);
 
-  // Load request data when tab changes
+  // Load request data when tab changes or when collections update
+  // BUG FIX: Added 'collections' to dependency array to prevent stale data issue
+  // Without it, when a user edits the request name in the sidebar, the local state here
+  // doesn't update. Then when saving, it would overwrite with the old name from local state.
+  // By including 'collections', the local state refreshes whenever the store updates,
+  // ensuring we always have the latest request data including name changes from sidebar.
   useEffect(() => {
     if (activeTab?.collectionId && activeTab?.requestId) {
       const req = getRequest(activeTab.collectionId, activeTab.requestId);
@@ -45,7 +50,7 @@ export default function RequestPanel({ setResponse, setSentRequest, setIsLoading
         setLocalRequest({ ...req });
       }
     }
-  }, [activeTab?.requestId, activeTab?.collectionId, getRequest]);
+  }, [activeTab?.requestId, activeTab?.collectionId, getRequest, collections]);
 
   const handleShowCode = useCallback((language: string = 'curl') => {
     if (!request) return;

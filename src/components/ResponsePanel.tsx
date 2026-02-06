@@ -3,6 +3,7 @@ import { Send, ArrowDown } from 'lucide-react';
 import { ApiResponse, ApiRequest } from '../types';
 import { formatBytes, formatTime, getStatusColor, prettyPrintJson, getMethodBgColor } from '../utils/helpers';
 import CodeEditor from './CodeEditor';
+import JSONViewer from './JSONViewer';
 
 interface ResponsePanelProps {
   response: ApiResponse | null;
@@ -148,12 +149,18 @@ export default function ResponsePanel({ response, sentRequest, isLoading }: Resp
       {/* Content */}
       <div className="flex-1 overflow-hidden">
         {activeTab === 'response-body' && (
-          <CodeEditor
-            value={formattedBody}
-            onChange={() => {}}
-            language="json"
-            readOnly
-          />
+          <>
+            {response.headers['content-type']?.includes('application/json') ? (
+              <JSONViewer data={response.body} />
+            ) : (
+              <CodeEditor
+                value={formattedBody}
+                onChange={() => {}}
+                language="json"
+                readOnly
+              />
+            )}
+          </>
         )}
 
         {activeTab === 'response-headers' && (

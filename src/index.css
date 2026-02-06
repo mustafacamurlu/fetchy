@@ -232,6 +232,69 @@ body {
   body.light-theme .var-highlight-undefined {
     @apply text-yellow-700;
   }
+
+  /* JSON Viewer Syntax Highlighting Colors */
+  .json-null {
+    color: #fb923c; /* orange-400 for dark */
+  }
+  body.light-theme .json-null {
+    color: #ea580c; /* orange-600 for light */
+  }
+
+  .json-boolean {
+    color: #c084fc; /* purple-400 for dark */
+  }
+  body.light-theme .json-boolean {
+    color: #9333ea; /* purple-600 for light */
+  }
+
+  .json-number {
+    color: #60a5fa; /* blue-400 for dark */
+  }
+  body.light-theme .json-number {
+    color: #2563eb; /* blue-600 for light */
+  }
+
+  .json-string {
+    color: #4ade80; /* green-400 for dark */
+  }
+  body.light-theme .json-string {
+    color: #16a34a; /* green-600 for light */
+  }
+
+  .json-key {
+    color: #22d3ee; /* cyan-400 for dark */
+  }
+  body.light-theme .json-key {
+    color: #0891b2; /* cyan-600 for light */
+  }
+
+  .json-jwt {
+    color: #f59e0b; /* amber-500 for dark */
+    font-weight: 600;
+  }
+  body.light-theme .json-jwt {
+    color: #d97706; /* amber-600 for light */
+    font-weight: 600;
+  }
+
+  .json-jwt-hover:hover {
+    background-color: rgba(245, 158, 11, 0.1); /* amber with opacity */
+  }
+  body.light-theme .json-jwt-hover:hover {
+    background-color: rgba(217, 119, 6, 0.15); /* amber with higher opacity for light */
+  }
+
+  /* JWT Dropdown Menu Hover States */
+  .jwt-menu-item {
+    transition: all 0.2s ease;
+  }
+  .jwt-menu-item:hover {
+    background-color: rgba(233, 69, 96, 0.2) !important; /* aki-accent with opacity */
+  }
+  body.light-theme .jwt-menu-item:hover {
+    background-color: rgba(201, 56, 80, 0.25) !important; /* aki-accent-light with opacity */
+  }
 }
 
 
