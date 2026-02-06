@@ -152,6 +152,10 @@ interface AppStore {
   requestPanelWidth: number;
   setRequestPanelWidth: (width: number) => void;
 
+  // Panel layout
+  panelLayout: 'horizontal' | 'vertical';
+  togglePanelLayout: () => void;
+
   // Import/Export
   importCollection: (collection: Collection) => void;
   exportCollection: (id: string) => Collection | null;
@@ -968,6 +972,15 @@ export const useAppStore = create<AppStore>()(
         });
       },
 
+      // Panel layout
+      panelLayout: 'horizontal',
+
+      togglePanelLayout: () => {
+        set(state => {
+          state.panelLayout = state.panelLayout === 'horizontal' ? 'vertical' : 'horizontal';
+        });
+      },
+
       // Import/Export
       importCollection: (collection: Collection) => {
         set(state => {
@@ -1030,6 +1043,7 @@ export const useAppStore = create<AppStore>()(
         sidebarWidth: state.sidebarWidth,
         sidebarCollapsed: state.sidebarCollapsed,
         requestPanelWidth: state.requestPanelWidth,
+        panelLayout: state.panelLayout,
       }),
     }
   )

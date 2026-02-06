@@ -30,7 +30,6 @@ import {
   Edit2,
   Copy,
   Plus,
-  History,
   Clock,
   Download,
   Upload,
@@ -45,6 +44,7 @@ import { useAppStore } from '../store/appStore';
 import { Collection, RequestFolder, ApiRequest, RequestHistoryItem, HttpMethod } from '../types';
 import { getMethodBgColor, exportToPostman } from '../utils/helpers';
 import CollectionAuthModal from './CollectionAuthModal';
+import Tooltip from './Tooltip';
 
 interface SidebarProps {
   onImport: () => void;
@@ -216,8 +216,8 @@ function SortableRequestItem({
       >
         <GripVertical size={12} className="text-aki-text-muted" />
       </button>
-      <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${getMethodBgColor(request.method)}`}>
-        {request.method.substring(0, 3)}
+      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded w-[52px] text-center ${getMethodBgColor(request.method)}`}>
+        {request.method}
       </span>
       {editingId === request.id ? (
         <input
@@ -876,8 +876,8 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
       onClick={() => onHistoryItemClick?.(item)}
     >
       <div className="flex items-center gap-2">
-        <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${getMethodBgColor(item.request.method)}`}>
-          {item.request.method.substring(0, 3)}
+        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded w-[52px] text-center ${getMethodBgColor(item.request.method)}`}>
+          {item.request.method}
         </span>
         <span className="text-sm text-aki-text truncate flex-1">{item.request.name || item.request.url}</span>
         <span className="text-xs text-aki-text-muted whitespace-nowrap">
@@ -910,13 +910,14 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
         <div className="flex items-center justify-between mb-3">
           <span className="text-sm font-medium text-aki-text">Collections</span>
           <div className="flex items-center gap-1">
-            <button
-              onClick={handleAddCollection}
-              className="p-1.5 hover:bg-aki-border rounded text-aki-text-muted hover:text-aki-text"
-              title="New Collection"
-            >
-              <Plus size={16} />
-            </button>
+            <Tooltip content="New Collection">
+              <button
+                onClick={handleAddCollection}
+                className="p-1.5 hover:bg-aki-border rounded text-aki-text-muted hover:text-aki-text"
+              >
+                <Plus size={16} />
+              </button>
+            </Tooltip>
           </div>
         </div>
         <div className="flex gap-2">
@@ -939,7 +940,7 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
                 : 'text-aki-text-muted hover:bg-aki-border'
             }`}
           >
-            <History size={16} />
+            <Clock size={16} />
             History
           </button>
         </div>
@@ -966,35 +967,39 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
                 </button>
               )}
             </div>
-            <button
-              onClick={handleExpandAll}
-              className="p-1.5 rounded border border-aki-border text-aki-text-muted hover:text-aki-text hover:bg-aki-border"
-              title="Expand All"
-            >
-              <ChevronDown size={14} />
-            </button>
-            <button
-              onClick={handleCollapseAll}
-              className="p-1.5 rounded border border-aki-border text-aki-text-muted hover:text-aki-text hover:bg-aki-border"
-              title="Collapse All"
-            >
-              <ChevronUp size={14} />
-            </button>
-            <button
-              onClick={onImport}
-              className="p-1.5 rounded border border-aki-border text-aki-text-muted hover:text-aki-text hover:bg-aki-border"
-              title="Import Collection"
-            >
-              <Upload size={14} />
-            </button>
-            <div className="relative">
+            <Tooltip content="Expand All">
               <button
-                onClick={() => setShowFilterMenu(!showFilterMenu)}
-                className={`p-1.5 rounded border ${hasActiveFilters ? 'bg-aki-accent/20 border-aki-accent text-aki-accent' : 'border-aki-border text-aki-text-muted hover:text-aki-text hover:bg-aki-border'}`}
-                title="Filter & Sort"
+                onClick={handleExpandAll}
+                className="p-1.5 rounded border border-aki-border text-aki-text-muted hover:text-aki-text hover:bg-aki-border"
               >
-                <Filter size={14} />
+                <ChevronDown size={14} />
               </button>
+            </Tooltip>
+            <Tooltip content="Collapse All">
+              <button
+                onClick={handleCollapseAll}
+                className="p-1.5 rounded border border-aki-border text-aki-text-muted hover:text-aki-text hover:bg-aki-border"
+              >
+                <ChevronUp size={14} />
+              </button>
+            </Tooltip>
+            <Tooltip content="Import Collection">
+              <button
+                onClick={onImport}
+                className="p-1.5 rounded border border-aki-border text-aki-text-muted hover:text-aki-text hover:bg-aki-border"
+              >
+                <Upload size={14} />
+              </button>
+            </Tooltip>
+            <div className="relative">
+              <Tooltip content="Filter & Sort">
+                <button
+                  onClick={() => setShowFilterMenu(!showFilterMenu)}
+                  className={`p-1.5 rounded border ${hasActiveFilters ? 'bg-aki-accent/20 border-aki-accent text-aki-accent' : 'border-aki-border text-aki-text-muted hover:text-aki-text hover:bg-aki-border'}`}
+                >
+                  <Filter size={14} />
+                </button>
+              </Tooltip>
               {showFilterMenu && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setShowFilterMenu(false)} />

@@ -7,6 +7,7 @@ import { resolveRequestVariables, generateCurl, generateJavaScript, generatePyth
 import { v4 as uuidv4 } from 'uuid';
 import VariableInput from './VariableInput';
 import VariableTextarea from './VariableTextarea';
+import Tooltip from './Tooltip';
 
 interface RequestPanelProps {
   setResponse: (response: ApiResponse | null) => void;
@@ -27,6 +28,8 @@ export default function RequestPanel({ setResponse, setSentRequest, setIsLoading
     collections,
     getActiveEnvironment,
     addToHistory,
+    addCollection,
+    addRequest,
   } = useAppStore();
 
   const activeTab = tabs.find(t => t.id === activeTabId);
@@ -44,13 +47,16 @@ export default function RequestPanel({ setResponse, setSentRequest, setIsLoading
   // By including 'collections', the local state refreshes whenever the store updates,
   // ensuring we always have the latest request data including name changes from sidebar.
   useEffect(() => {
-    if (activeTab?.collectionId && activeTab?.requestId) {
+    // If this is a history item tab, load the history request data
+    if (activeTab?.isHistoryItem && activeTab?.historyRequest) {
+      setLocalRequest({ ...activeTab.historyRequest });
+    } else if (activeTab?.collectionId && activeTab?.requestId) {
       const req = getRequest(activeTab.collectionId, activeTab.requestId);
       if (req) {
         setLocalRequest({ ...req });
       }
     }
-  }, [activeTab?.requestId, activeTab?.collectionId, getRequest, collections]);
+  }, [activeTab?.requestId, activeTab?.collectionId, activeTab?.isHistoryItem, activeTab?.historyRequest, getRequest, collections]);
 
   const handleShowCode = useCallback((language: string = 'curl') => {
     if (!request) return;
@@ -98,11 +104,36 @@ export default function RequestPanel({ setResponse, setSentRequest, setIsLoading
   };
 
   const handleSave = useCallback(() => {
-    if (request && activeTab?.collectionId) {
+    if (!request) return;
+
+    // If this is a history item, save to special "Request History Rollback" collection
+    if (activeTab?.isHistoryItem) {
+      // Find or create the "Request History Rollback" collection
+      let rollbackCollection = collections.find(c => c.name === 'Request History Rollback');
+
+      if (!rollbackCollection) {
+        rollbackCollection = addCollection('Request History Rollback', 'Saved requests from history');
+      }
+
+      // Add the request to the rollback collection
+      const newRequest = addRequest(rollbackCollection.id, null, request);
+
+      // Update the tab to no longer be a history item and link to the new request
+      updateTab(activeTab.id, {
+        isHistoryItem: false,
+        historyRequest: undefined,
+        historyResponse: undefined,
+        collectionId: rollbackCollection.id,
+        requestId: newRequest.id,
+        isModified: false,
+        title: newRequest.name,
+      });
+    } else if (activeTab?.collectionId) {
+      // Normal save for regular requests
       updateRequest(activeTab.collectionId, request.id, request);
       updateTab(activeTab.id, { isModified: false, title: request.name });
     }
-  }, [request, activeTab, updateRequest, updateTab]);
+  }, [request, activeTab, updateRequest, updateTab, collections, addCollection, addRequest]);
 
   const handleChange = useCallback((updates: Partial<ApiRequest>) => {
     if (request) {
@@ -283,13 +314,14 @@ export default function RequestPanel({ setResponse, setSentRequest, setIsLoading
           >
             <Plus size={14} /> Add {field === 'headers' ? 'Header' : 'Parameter'}
           </button>
-          <button
-            onClick={() => openBatchEdit(field)}
-            className="flex items-center gap-1 px-2 py-1 text-xs text-aki-text-muted hover:text-aki-text hover:bg-aki-border rounded"
-            title="Bulk Edit"
-          >
-            <FileText size={14} /> Bulk Edit
-          </button>
+          <Tooltip content="Bulk Edit">
+            <button
+              onClick={() => openBatchEdit(field)}
+              className="flex items-center gap-1 px-2 py-1 text-xs text-aki-text-muted hover:text-aki-text hover:bg-aki-border rounded"
+            >
+              <FileText size={14} /> Bulk Edit
+            </button>
+          </Tooltip>
         </div>
         <div className="flex-1 overflow-auto">
           <table className="w-full kv-table">
@@ -718,6 +750,7 @@ export default function RequestPanel({ setResponse, setSentRequest, setIsLoading
     <div className="h-full flex flex-col bg-aki-bg">
       {/* URL bar */}
       <div className="px-4 py-3 border-b border-aki-border flex items-center gap-2">
+
         <select
           value={request.method}
           onChange={(e) => handleChange({ method: e.target.value as HttpMethod })}
@@ -753,16 +786,17 @@ export default function RequestPanel({ setResponse, setSentRequest, setIsLoading
         </button>
 
         <div className="relative">
-          <button
-            onClick={() => setShowCodeDropdown(!showCodeDropdown)}
-            disabled={!request.url}
-            className="btn btn-secondary flex items-center gap-1.5 disabled:opacity-50 pr-2"
-            title="Generate Code"
-          >
-            <Code size={16} className="text-purple-400" />
-            <span className="font-medium">Code</span>
-            <ChevronDown size={14} className="text-aki-text-muted" />
-          </button>
+          <Tooltip content="Generate Code">
+            <button
+              onClick={() => setShowCodeDropdown(!showCodeDropdown)}
+              disabled={!request.url}
+              className="btn btn-secondary flex items-center gap-1.5 disabled:opacity-50 pr-2"
+            >
+              <Code size={16} className="text-purple-400" />
+              <span className="font-medium">Code</span>
+              <ChevronDown size={14} className="text-aki-text-muted" />
+            </button>
+          </Tooltip>
 
           {showCodeDropdown && request.url && (
             <>
@@ -823,14 +857,15 @@ export default function RequestPanel({ setResponse, setSentRequest, setIsLoading
             </button>
           ))}
         </div>
-        <button
-          onClick={handleSave}
-          className="px-4 py-2 text-sm font-medium text-aki-text-muted hover:text-aki-text hover:bg-aki-border transition-colors flex items-center gap-1"
-          title="Save Request"
-        >
-          <Save size={16} />
-          Save
-        </button>
+        <Tooltip content={activeTab?.isHistoryItem ? "Save to Request History Rollback" : "Save Request"}>
+          <button
+            onClick={handleSave}
+            className="px-4 py-2 text-sm font-medium text-aki-text-muted hover:text-aki-text hover:bg-aki-border transition-colors flex items-center gap-1"
+          >
+            <Save size={16} />
+            {activeTab?.isHistoryItem ? 'Save to Rollback' : 'Save'}
+          </button>
+        </Tooltip>
       </div>
 
       {/* Section content */}

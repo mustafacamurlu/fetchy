@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { HelpCircle, Settings, RefreshCw } from 'lucide-react';
+import { HelpCircle, Settings, RefreshCw, PanelLeftClose, PanelLeftOpen, Rows, Columns } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import TabBar from './components/TabBar';
 import RequestPanel from './components/RequestPanel';
@@ -14,6 +14,7 @@ import SettingsModal from './components/SettingsModal';
 import UpdateModal from './components/UpdateModal';
 import ThemeToggle from './components/ThemeToggle';
 import ResizeHandle from './components/ResizeHandle';
+import Tooltip from './components/Tooltip';
 import { useAppStore } from './store/appStore';
 import { usePreferencesStore } from './store/preferencesStore';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
@@ -27,6 +28,7 @@ function App() {
     activeTabId,
     sidebarWidth,
     sidebarCollapsed,
+    toggleSidebar,
     collections,
     addCollection,
     addRequest,
@@ -34,6 +36,8 @@ function App() {
     setSidebarWidth,
     requestPanelWidth,
     setRequestPanelWidth,
+    panelLayout,
+    togglePanelLayout,
   } = useAppStore();
   const { loadPreferences } = usePreferencesStore();
   const [response, setResponse] = useState<ApiResponse | null>(null);
@@ -57,14 +61,38 @@ function App() {
   const activeTab = tabs.find(t => t.id === activeTabId);
   const hasActiveRequest = activeTab?.type === 'request';
 
+  // Load history response/request when switching to a history tab
+  useEffect(() => {
+    if (activeTab?.isHistoryItem) {
+      if (activeTab.historyResponse) {
+        setResponse(activeTab.historyResponse);
+      }
+      if (activeTab.historyRequest) {
+        setSentRequest(activeTab.historyRequest);
+      }
+    } else {
+      // Clear response when switching to non-history tab
+      // setResponse(null);
+      // setSentRequest(null);
+    }
+  }, [activeTabId, activeTab?.isHistoryItem, activeTab?.historyResponse, activeTab?.historyRequest]);
+
   const handleHistoryItemClick = useCallback((item: RequestHistoryItem) => {
-    // Just set the response and sent request from history to display them
-    // Don't add to collection - user can manually save if they want
+    // Open a new tab for the history item
+    openTab({
+      type: 'request',
+      title: `${item.request.method} ${item.request.name || 'History'}`,
+      isHistoryItem: true,
+      historyRequest: item.request,
+      historyResponse: item.response,
+    });
+
+    // Set response and sent request for display
     if (item.response) {
       setResponse(item.response);
     }
     setSentRequest(item.request);
-  }, []);
+  }, [openTab]);
 
   const handleNewRequest = useCallback(() => {
     if (collections.length === 0) {
@@ -102,12 +130,22 @@ function App() {
 
   const handleRequestPanelResize = useCallback((delta: number) => {
     if (!mainPanelRef.current) return;
-    const containerWidth = mainPanelRef.current.offsetWidth;
-    const pixelWidth = (requestPanelWidth / 100) * containerWidth;
-    const newPixelWidth = Math.max(200, Math.min(containerWidth - 200, pixelWidth + delta));
-    const newPercentage = (newPixelWidth / containerWidth) * 100;
-    setRequestPanelWidth(newPercentage);
-  }, [requestPanelWidth, setRequestPanelWidth]);
+
+    if (panelLayout === 'horizontal') {
+      const containerWidth = mainPanelRef.current.offsetWidth;
+      const pixelWidth = (requestPanelWidth / 100) * containerWidth;
+      const newPixelWidth = Math.max(200, Math.min(containerWidth - 200, pixelWidth + delta));
+      const newPercentage = (newPixelWidth / containerWidth) * 100;
+      setRequestPanelWidth(newPercentage);
+    } else {
+      // Vertical layout
+      const containerHeight = mainPanelRef.current.offsetHeight - 40; // Subtract TabBar height
+      const pixelHeight = (requestPanelWidth / 100) * containerHeight;
+      const newPixelHeight = Math.max(150, Math.min(containerHeight - 150, pixelHeight + delta));
+      const newPercentage = (newPixelHeight / containerHeight) * 100;
+      setRequestPanelWidth(newPercentage);
+    }
+  }, [requestPanelWidth, setRequestPanelWidth, panelLayout]);
 
   // Set up keyboard shortcuts
   useKeyboardShortcuts([
@@ -149,28 +187,14 @@ function App() {
         </div>
         <div className="flex items-center gap-2">
           <EnvironmentDropdown onOpenSettings={() => setShowEnvironmentModal(true)} />
-          <ThemeToggle />
-          <button
-            onClick={() => setShowUpdateModal(true)}
-            className="p-2 hover:bg-aki-border rounded text-aki-text-muted hover:text-aki-text"
-            title="Check for Updates"
-          >
-            <RefreshCw size={18} />
-          </button>
-          <button
-            onClick={() => setShowShortcutsModal(true)}
-            className="p-2 hover:bg-aki-border rounded text-aki-text-muted hover:text-aki-text"
-            title="Keyboard Shortcuts (Ctrl+/)"
-          >
-            <HelpCircle size={18} />
-          </button>
-          <button
-            onClick={() => setShowSettingsModal(true)}
-            className="p-2 hover:bg-aki-border rounded text-aki-text-muted hover:text-aki-text"
-            title="Settings"
-          >
-            <Settings size={18} />
-          </button>
+          <Tooltip content="Settings">
+            <button
+              onClick={() => setShowSettingsModal(true)}
+              className="p-2 hover:bg-aki-border rounded text-aki-text-muted hover:text-aki-text"
+            >
+              <Settings size={18} />
+            </button>
+          </Tooltip>
         </div>
       </div>
 
@@ -202,10 +226,13 @@ function App() {
 
           {/* Request/Response area */}
           {hasActiveRequest ? (
-            <div className="flex-1 flex overflow-hidden">
+            <div className={`flex-1 flex overflow-hidden ${panelLayout === 'vertical' ? 'flex-col' : ''}`}>
               {/* Request panel */}
               <div
-                style={{ width: `${requestPanelWidth}%` }}
+                style={panelLayout === 'horizontal'
+                  ? { width: `${requestPanelWidth}%` }
+                  : { height: `${requestPanelWidth}%` }
+                }
                 className="shrink-0 overflow-hidden"
               >
                 <RequestPanel
@@ -218,7 +245,7 @@ function App() {
 
               {/* Request/Response resize handle */}
               <ResizeHandle
-                direction="horizontal"
+                direction={panelLayout === 'horizontal' ? 'horizontal' : 'vertical'}
                 onResize={handleRequestPanelResize}
               />
 
@@ -235,6 +262,51 @@ function App() {
             <WelcomeScreen onImport={handleImport} />
           )}
         </div>
+      </div>
+
+      {/* Bottom bar with toggle buttons */}
+      <div className="h-10 bg-aki-sidebar border-t border-aki-border flex items-center px-4 gap-2 shrink-0">
+        <Tooltip content={sidebarCollapsed ? "Show Sidebar" : "Hide Sidebar"}>
+          <button
+            onClick={toggleSidebar}
+            className="p-2 hover:bg-aki-border rounded text-aki-text-muted hover:text-aki-text"
+          >
+            {sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+          </button>
+        </Tooltip>
+
+        {hasActiveRequest && (
+          <Tooltip content={panelLayout === 'horizontal' ? "Switch to Vertical Layout" : "Switch to Horizontal Layout"}>
+            <button
+              onClick={togglePanelLayout}
+              className="p-2 hover:bg-aki-border rounded text-aki-text-muted hover:text-aki-text"
+            >
+              {panelLayout === 'horizontal' ? <Rows size={18} /> : <Columns size={18} />}
+            </button>
+          </Tooltip>
+        )}
+
+        <div className="flex-1" />
+
+        <ThemeToggle />
+
+        <Tooltip content="Check for Updates">
+          <button
+            onClick={() => setShowUpdateModal(true)}
+            className="p-2 hover:bg-aki-border rounded text-aki-text-muted hover:text-aki-text"
+          >
+            <RefreshCw size={18} />
+          </button>
+        </Tooltip>
+
+        <Tooltip content="Keyboard Shortcuts (Ctrl+/)">
+          <button
+            onClick={() => setShowShortcutsModal(true)}
+            className="p-2 hover:bg-aki-border rounded text-aki-text-muted hover:text-aki-text"
+          >
+            <HelpCircle size={18} />
+          </button>
+        </Tooltip>
       </div>
 
       {/* Modals */}

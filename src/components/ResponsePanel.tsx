@@ -66,7 +66,7 @@ export default function ResponsePanel({ response, sentRequest, isLoading }: Resp
         {sentRequest && (
           <div className="flex items-center gap-2 mb-2 pb-2 border-b border-aki-border/50">
             <Send size={14} className="text-aki-accent" />
-            <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${getMethodBgColor(sentRequest.method)}`}>
+            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded w-[52px] text-center ${getMethodBgColor(sentRequest.method)}`}>
               {sentRequest.method}
             </span>
             <span className="text-sm text-aki-text truncate flex-1">{sentRequest.url}</span>

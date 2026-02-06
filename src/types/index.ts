@@ -212,6 +212,9 @@ export interface TabState {
   folderId?: string;
   environmentId?: string;
   isModified?: boolean;
+  isHistoryItem?: boolean; // Flag to indicate this tab is loaded from history
+  historyRequest?: ApiRequest; // Store the original history request data
+  historyResponse?: ApiResponse; // Store the original history response data
 }
 
 export interface AppState {
