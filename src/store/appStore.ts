@@ -22,7 +22,7 @@ export interface AppStorageExport {
   collections: Collection[];
   environments: Environment[];
   activeEnvironmentId: string | null;
-  history: RequestHistoryItem[];
+  history?: RequestHistoryItem[]; // Optional - not included in exports but may exist in imports
 }
 
 // Custom storage that uses Electron API when available
@@ -1008,13 +1008,74 @@ export const useAppStore = create<AppStore>()(
       // Full app storage export/import
       exportFullStorage: () => {
         const state = get();
+
+        // Deep clone collections and environments to avoid modifying the original state
+        const sanitizeVariables = (variables: any[]) => {
+          return variables.map(variable => ({
+            ...variable,
+            // For secret variables, replace value with the key itself
+            value: variable.isSecret ? variable.key : variable.value
+          }));
+        };
+
+        const sanitizeAuth = (auth: any) => {
+          if (!auth) return auth;
+
+          const sanitized = { ...auth };
+
+          // Handle different auth types
+          if (auth.type === 'basic' && auth.basic) {
+            sanitized.basic = {
+              username: auth.basic.username,
+              // Replace password with a placeholder if it exists
+              password: auth.basic.password ? '{{password}}' : ''
+            };
+          } else if (auth.type === 'bearer' && auth.bearer) {
+            sanitized.bearer = {
+              // Replace token with a placeholder if it exists
+              token: auth.bearer.token ? '{{token}}' : ''
+            };
+          } else if (auth.type === 'api-key' && auth.apiKey) {
+            sanitized.apiKey = {
+              ...auth.apiKey,
+              // Replace value with a placeholder if it exists
+              value: auth.apiKey.value ? '{{apiKey}}' : ''
+            };
+          }
+
+          return sanitized;
+        };
+
+        // Sanitize collections (variables and auth)
+        const sanitizedCollections = state.collections.map(collection => ({
+          ...collection,
+          variables: sanitizeVariables(collection.variables || []),
+          auth: sanitizeAuth(collection.auth),
+          folders: collection.folders.map((folder: any) => ({
+            ...folder,
+            auth: sanitizeAuth(folder.auth),
+            // Recursively handle nested folders if needed
+            folders: folder.folders ? folder.folders.map((subFolder: any) => ({
+              ...subFolder,
+              auth: sanitizeAuth(subFolder.auth)
+            })) : []
+          }))
+        }));
+
+        // Sanitize environments (variables only)
+        const sanitizedEnvironments = state.environments.map(env => ({
+          ...env,
+          variables: sanitizeVariables(env.variables || [])
+        }));
+
         return {
           version: '1.0',
           exportedAt: new Date().toISOString(),
-          collections: state.collections,
-          environments: state.environments,
+          collections: sanitizedCollections,
+          environments: sanitizedEnvironments,
           activeEnvironmentId: state.activeEnvironmentId,
-          history: state.history,
+          // Explicitly exclude history
+          // history: state.history, // REMOVED - history is not exported
         };
       },
 
