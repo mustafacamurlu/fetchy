@@ -10,6 +10,7 @@ import {
   TabState,
   RequestHistoryItem,
   HttpMethod,
+  OpenAPIDocument,
 } from '../types';
 
 // Check if running in Electron
@@ -22,7 +23,7 @@ export interface AppStorageExport {
   collections: Collection[];
   environments: Environment[];
   activeEnvironmentId: string | null;
-  history: RequestHistoryItem[];
+  history?: RequestHistoryItem[]; // Optional - not included in exports but may exist in imports
 }
 
 // Custom storage that uses Electron API when available
@@ -124,6 +125,8 @@ interface AppStore {
   getActiveEnvironment: () => Environment | null;
   duplicateEnvironment: (id: string) => Environment | null;
   importEnvironment: (environment: Environment) => Environment;
+  reorderEnvironments: (fromIndex: number, toIndex: number) => void;
+  reorderEnvironmentVariables: (environmentId: string, fromIndex: number, toIndex: number) => void;
 
   // Tabs
   tabs: TabState[];
@@ -167,6 +170,14 @@ interface AppStore {
 
   // Toggle collection expanded
   toggleCollectionExpanded: (id: string) => void;
+
+  // OpenAPI Documents
+  openApiDocuments: OpenAPIDocument[];
+  addOpenApiDocument: (name: string, content?: string, format?: 'yaml' | 'json') => OpenAPIDocument;
+  updateOpenApiDocument: (id: string, updates: Partial<OpenAPIDocument>) => void;
+  deleteOpenApiDocument: (id: string) => void;
+  getOpenApiDocument: (id: string) => OpenAPIDocument | null;
+  reorderOpenApiDocuments: (fromIndex: number, toIndex: number) => void;
 }
 
 const createDefaultRequest = (overrides?: Partial<ApiRequest>): ApiRequest => ({
@@ -863,16 +874,45 @@ export const useAppStore = create<AppStore>()(
         return imported;
       },
 
+      reorderEnvironments: (fromIndex: number, toIndex: number) => {
+        set(state => {
+          const [removed] = state.environments.splice(fromIndex, 1);
+          state.environments.splice(toIndex, 0, removed);
+        });
+      },
+
+      reorderEnvironmentVariables: (environmentId: string, fromIndex: number, toIndex: number) => {
+        set(state => {
+          const envIndex = state.environments.findIndex(e => e.id === environmentId);
+          if (envIndex === -1) return;
+
+          const [removed] = state.environments[envIndex].variables.splice(fromIndex, 1);
+          state.environments[envIndex].variables.splice(toIndex, 0, removed);
+        });
+      },
+
       // Tabs
       tabs: [],
       activeTabId: null,
 
       openTab: (tab: Omit<TabState, 'id'>) => {
         set(state => {
-          // Check if tab already exists
-          const existingTab = state.tabs.find(t =>
-            t.requestId === tab.requestId && tab.requestId
-          );
+          // Check if tab already exists based on type
+          let existingTab = null;
+
+          if (tab.requestId) {
+            // For request tabs, check by requestId
+            existingTab = state.tabs.find(t => t.requestId === tab.requestId);
+          } else if (tab.openApiDocId) {
+            // For OpenAPI document tabs, check by openApiDocId
+            existingTab = state.tabs.find(t => t.openApiDocId === tab.openApiDocId);
+          } else if (tab.environmentId) {
+            // For environment tabs, check by environmentId
+            existingTab = state.tabs.find(t => t.environmentId === tab.environmentId);
+          } else if (tab.collectionId && tab.type === 'collection') {
+            // For collection tabs, check by collectionId and type
+            existingTab = state.tabs.find(t => t.collectionId === tab.collectionId && t.type === 'collection');
+          }
 
           if (existingTab) {
             state.activeTabId = existingTab.id;
@@ -1008,13 +1048,74 @@ export const useAppStore = create<AppStore>()(
       // Full app storage export/import
       exportFullStorage: () => {
         const state = get();
+
+        // Deep clone collections and environments to avoid modifying the original state
+        const sanitizeVariables = (variables: any[]) => {
+          return variables.map(variable => ({
+            ...variable,
+            // For secret variables, replace value with the key itself
+            value: variable.isSecret ? variable.key : variable.value
+          }));
+        };
+
+        const sanitizeAuth = (auth: any) => {
+          if (!auth) return auth;
+
+          const sanitized = { ...auth };
+
+          // Handle different auth types
+          if (auth.type === 'basic' && auth.basic) {
+            sanitized.basic = {
+              username: auth.basic.username,
+              // Replace password with a placeholder if it exists
+              password: auth.basic.password ? '{{password}}' : ''
+            };
+          } else if (auth.type === 'bearer' && auth.bearer) {
+            sanitized.bearer = {
+              // Replace token with a placeholder if it exists
+              token: auth.bearer.token ? '{{token}}' : ''
+            };
+          } else if (auth.type === 'api-key' && auth.apiKey) {
+            sanitized.apiKey = {
+              ...auth.apiKey,
+              // Replace value with a placeholder if it exists
+              value: auth.apiKey.value ? '{{apiKey}}' : ''
+            };
+          }
+
+          return sanitized;
+        };
+
+        // Sanitize collections (variables and auth)
+        const sanitizedCollections = state.collections.map(collection => ({
+          ...collection,
+          variables: sanitizeVariables(collection.variables || []),
+          auth: sanitizeAuth(collection.auth),
+          folders: collection.folders.map((folder: any) => ({
+            ...folder,
+            auth: sanitizeAuth(folder.auth),
+            // Recursively handle nested folders if needed
+            folders: folder.folders ? folder.folders.map((subFolder: any) => ({
+              ...subFolder,
+              auth: sanitizeAuth(subFolder.auth)
+            })) : []
+          }))
+        }));
+
+        // Sanitize environments (variables only)
+        const sanitizedEnvironments = state.environments.map(env => ({
+          ...env,
+          variables: sanitizeVariables(env.variables || [])
+        }));
+
         return {
           version: '1.0',
           exportedAt: new Date().toISOString(),
-          collections: state.collections,
-          environments: state.environments,
+          collections: sanitizedCollections,
+          environments: sanitizedEnvironments,
           activeEnvironmentId: state.activeEnvironmentId,
-          history: state.history,
+          // Explicitly exclude history
+          // history: state.history, // REMOVED - history is not exported
         };
       },
 
@@ -1038,6 +1139,59 @@ export const useAppStore = create<AppStore>()(
           state.activeRequest = null;
         });
       },
+
+      // OpenAPI Documents
+      openApiDocuments: [],
+
+      addOpenApiDocument: (name: string, content?: string, format?: 'yaml' | 'json') => {
+        const doc: OpenAPIDocument = {
+          id: uuidv4(),
+          name,
+          content: content || '',
+          format: format || 'yaml',
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+        set(state => {
+          state.openApiDocuments.push(doc);
+        });
+        return doc;
+      },
+
+      updateOpenApiDocument: (id: string, updates: Partial<OpenAPIDocument>) => {
+        set(state => {
+          const index = state.openApiDocuments.findIndex(d => d.id === id);
+          if (index !== -1) {
+            state.openApiDocuments[index] = {
+              ...state.openApiDocuments[index],
+              ...updates,
+              updatedAt: Date.now(),
+            };
+          }
+        });
+      },
+
+      deleteOpenApiDocument: (id: string) => {
+        set(state => {
+          state.openApiDocuments = state.openApiDocuments.filter(d => d.id !== id);
+          // Close any tabs for this document
+          state.tabs = state.tabs.filter(t => t.openApiDocId !== id);
+        });
+      },
+
+      getOpenApiDocument: (id: string) => {
+        const state = get();
+        return state.openApiDocuments.find(d => d.id === id) || null;
+      },
+
+      reorderOpenApiDocuments: (fromIndex: number, toIndex: number) => {
+        set(state => {
+          const docs = [...state.openApiDocuments];
+          const [moved] = docs.splice(fromIndex, 1);
+          docs.splice(toIndex, 0, moved);
+          state.openApiDocuments = docs;
+        });
+      },
     })),
     {
       name: 'fetchy-storage',
@@ -1051,6 +1205,7 @@ export const useAppStore = create<AppStore>()(
         sidebarCollapsed: state.sidebarCollapsed,
         requestPanelWidth: state.requestPanelWidth,
         panelLayout: state.panelLayout,
+        openApiDocuments: state.openApiDocuments,
       }),
     }
   )

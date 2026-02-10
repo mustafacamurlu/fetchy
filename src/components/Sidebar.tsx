@@ -39,9 +39,10 @@ import {
   GripVertical,
   X,
   MoveRight,
+  FileCode,
 } from 'lucide-react';
 import { useAppStore } from '../store/appStore';
-import { Collection, RequestFolder, ApiRequest, RequestHistoryItem, HttpMethod } from '../types';
+import { Collection, RequestFolder, ApiRequest, RequestHistoryItem, HttpMethod, OpenAPIDocument } from '../types';
 import { getMethodBgColor, exportToPostman } from '../utils/helpers';
 import CollectionAuthModal from './CollectionAuthModal';
 import Tooltip from './Tooltip';
@@ -55,11 +56,106 @@ type SortOption = 'name-asc' | 'name-desc' | 'method' | 'created';
 type FilterMethod = HttpMethod | 'all';
 
 interface DragItem {
-  type: 'collection' | 'folder' | 'request';
+  type: 'collection' | 'folder' | 'request' | 'api-doc';
   id: string;
   collectionId: string;
   folderId?: string;
   index: number;
+}
+
+// Sortable API Document Item
+function SortableApiDocItem({
+  doc,
+  onClick,
+  onEdit,
+  onDelete,
+  editingId,
+  editingName,
+  setEditingName,
+  inputRef,
+  onEditComplete,
+}: {
+  doc: OpenAPIDocument;
+  onClick: () => void;
+  onEdit: (e: React.MouseEvent) => void;
+  onDelete: (e: React.MouseEvent) => void;
+  editingId: string | null;
+  editingName: string;
+  setEditingName: (name: string) => void;
+  inputRef: React.RefObject<HTMLInputElement>;
+  onEditComplete: () => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({
+    id: `api-doc-${doc.id}`,
+    data: { type: 'api-doc', doc }
+  });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className="tree-item px-2 py-2 cursor-pointer group rounded hover:bg-aki-border flex items-center gap-2"
+      onClick={onClick}
+    >
+      <button
+        {...attributes}
+        {...listeners}
+        className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-aki-border rounded cursor-grab active:cursor-grabbing"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <GripVertical size={12} className="text-aki-text-muted" />
+      </button>
+      <FileCode size={14} className="text-aki-accent shrink-0" />
+      {editingId === doc.id ? (
+        <input
+          ref={inputRef}
+          type="text"
+          value={editingName}
+          onChange={(e) => setEditingName(e.target.value)}
+          onBlur={onEditComplete}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') onEditComplete();
+            else if (e.key === 'Escape') onEditComplete();
+          }}
+          onClick={(e) => e.stopPropagation()}
+          className="flex-1 text-sm text-aki-text bg-aki-bg border border-aki-accent rounded px-1 py-0.5 outline-none"
+          autoFocus
+        />
+      ) : (
+        <span className="text-sm text-aki-text truncate flex-1">{doc.name}</span>
+      )}
+      <span className="text-[10px] px-1.5 py-0.5 rounded bg-aki-bg text-aki-text-muted uppercase">
+        {doc.format}
+      </span>
+      <button
+        onClick={onEdit}
+        className="opacity-0 group-hover:opacity-100 p-1 hover:bg-aki-border rounded"
+        title="Rename"
+      >
+        <Edit2 size={12} />
+      </button>
+      <button
+        onClick={onDelete}
+        className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-500/20 hover:text-red-400 rounded"
+        title="Delete"
+      >
+        <Trash2 size={12} />
+      </button>
+    </div>
+  );
 }
 
 // Sortable Collection Item
@@ -363,6 +459,8 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
     deleteRequest,
     duplicateRequest,
     openTab,
+    updateTab,
+    tabs,
     history,
     clearHistory,
     reorderCollections,
@@ -370,9 +468,14 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
     reorderFolders,
     moveRequest,
     moveFolder,
+    openApiDocuments,
+    addOpenApiDocument,
+    updateOpenApiDocument,
+    deleteOpenApiDocument,
+    reorderOpenApiDocuments,
   } = useAppStore();
 
-  const [activeTab, setActiveTab] = useState<'collections' | 'history'>('collections');
+  const [activeTab, setActiveTab] = useState<'collections' | 'history' | 'api'>('collections');
   const [authModal, setAuthModal] = useState<{ open: boolean; collectionId: string; folderId?: string } | null>(null);
   const [contextMenu, setContextMenu] = useState<{
     x: number;
@@ -385,13 +488,22 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
+  const [editingApiSpecId, setEditingApiSpecId] = useState<string | null>(null);
+  const [editingApiSpecName, setEditingApiSpecName] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
+  const apiSpecInputRef = useRef<HTMLInputElement>(null);
 
   // Filter and sort states
   const [searchQuery, setSearchQuery] = useState('');
   const [filterMethod, setFilterMethod] = useState<FilterMethod>('all');
   const [sortOption, setSortOption] = useState<SortOption>('name-asc');
   const [showFilterMenu, setShowFilterMenu] = useState(false);
+
+  // API Spec filter and sort states
+  const [apiSearchQuery, setApiSearchQuery] = useState('');
+  const [apiSortOption, setApiSortOption] = useState<'name-asc' | 'name-desc' | 'format' | 'created'>('created');
+  const [showApiFilterMenu, setShowApiFilterMenu] = useState(false);
+  const [apiFilterFormat, setApiFilterFormat] = useState<'all' | 'yaml' | 'json'>('all');
 
   // Move to submenu state
   const [showMoveToMenu, setShowMoveToMenu] = useState(false);
@@ -484,6 +596,41 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
     });
   }, [collections, searchQuery, filterMethod, sortOption, filterRequests, filterFolders, hasMatchingRequests]);
 
+  // Filter and sort API documents
+  const filteredApiDocuments = useMemo(() => {
+    let filtered = [...openApiDocuments];
+
+    // Filter by search query
+    if (apiSearchQuery) {
+      const query = apiSearchQuery.toLowerCase();
+      filtered = filtered.filter(doc =>
+        doc.name.toLowerCase().includes(query) ||
+        doc.content.toLowerCase().includes(query)
+      );
+    }
+
+    // Filter by format
+    if (apiFilterFormat !== 'all') {
+      filtered = filtered.filter(doc => doc.format === apiFilterFormat);
+    }
+
+    // Sort
+    switch (apiSortOption) {
+      case 'name-asc':
+        filtered = filtered.sort((a, b) => a.name.localeCompare(b.name));
+        break;
+      case 'name-desc':
+        filtered = filtered.sort((a, b) => b.name.localeCompare(a.name));
+        break;
+      case 'format':
+        filtered = filtered.sort((a, b) => a.format.localeCompare(b.format));
+        break;
+      // 'created' keeps original order
+    }
+
+    return filtered;
+  }, [openApiDocuments, apiSearchQuery, apiFilterFormat, apiSortOption]);
+
   const handleContextMenu = (
     e: React.MouseEvent,
     type: 'collection' | 'folder' | 'request',
@@ -528,6 +675,10 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
       const collectionId = idStr.replace('collection-', '');
       const index = collections.findIndex(c => c.id === collectionId);
       setActiveDragData({ type: 'collection', id: collectionId, collectionId, index });
+    } else if (idStr.startsWith('api-doc-')) {
+      const apiDocId = idStr.replace('api-doc-', '');
+      const index = filteredApiDocuments.findIndex(doc => doc.id === apiDocId);
+      setActiveDragData({ type: 'api-doc', id: apiDocId, collectionId: '', index });
     } else if (idStr.startsWith('request-')) {
       const data = active.data.current;
       if (data) {
@@ -565,6 +716,24 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
 
     const activeIdStr = active.id as string;
     const overIdStr = over.id as string;
+
+    // Handle API document reordering
+    if (activeIdStr.startsWith('api-doc-') && overIdStr.startsWith('api-doc-')) {
+      const activeApiDocId = activeIdStr.replace('api-doc-', '');
+      const overApiDocId = overIdStr.replace('api-doc-', '');
+      const oldIndex = filteredApiDocuments.findIndex(doc => doc.id === activeApiDocId);
+      const newIndex = filteredApiDocuments.findIndex(doc => doc.id === overApiDocId);
+      if (oldIndex !== -1 && newIndex !== -1) {
+        // Map back to original indices in the complete list
+        const originalOldIndex = openApiDocuments.findIndex(doc => doc.id === activeApiDocId);
+        const originalNewIndex = openApiDocuments.findIndex(doc => doc.id === overApiDocId);
+        if (originalOldIndex !== -1 && originalNewIndex !== -1) {
+          setApiSortOption('created'); // Reset sort to manual order
+          reorderOpenApiDocuments(originalOldIndex, originalNewIndex);
+        }
+      }
+      return;
+    }
 
     // Handle collection reordering
     if (activeIdStr.startsWith('collection-') && overIdStr.startsWith('collection-')) {
@@ -649,6 +818,7 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
                 ? requests.findIndex(r => r.id === overRequest.id)
                 : requests.length;
               if (oldIndex !== -1 && newIndex !== -1) {
+                setSortOption('created');
                 reorderRequests(sourceCollectionId, sourceFolderId || null, oldIndex, newIndex);
               }
             }
@@ -907,100 +1077,131 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
     <div className="h-full bg-aki-sidebar flex flex-col border-r border-aki-border">
       {/* Header */}
       <div className="p-3 border-b border-aki-border">
-        <div className="flex items-center justify-between mb-3">
-          <span className="text-sm font-medium text-aki-text">Collections</span>
-          <div className="flex items-center gap-1">
-            <Tooltip content="New Collection">
-              <button
-                onClick={handleAddCollection}
-                className="p-1.5 hover:bg-aki-border rounded text-aki-text-muted hover:text-aki-text"
-              >
-                <Plus size={16} />
-              </button>
-            </Tooltip>
-          </div>
-        </div>
-        <div className="flex gap-2">
+        <div className="bg-aki-card border border-aki-border rounded-lg p-1 flex gap-1">
           <button
-            onClick={() => setActiveTab('collections')}
-            className={`flex-1 px-3 py-2 text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2 ${
-              activeTab === 'collections'
-                ? 'bg-aki-border text-aki-text'
-                : 'text-aki-text-muted hover:bg-aki-border'
+            onClick={() => setActiveTab('api')}
+            className={`${
+              activeTab === 'api' ? 'flex-1' : ''
+            } px-3 py-2.5 text-sm font-medium rounded-md transition-all flex items-center justify-center gap-1.5 ${
+              activeTab === 'api'
+                ? 'bg-aki-accent text-white shadow-sm'
+                : 'text-aki-text-muted hover:bg-aki-border hover:text-aki-text'
             }`}
           >
-            <Folder size={16} />
-            Collections
+            <FileCode size={14} />
+            {activeTab === 'api' && 'API'}
+          </button>
+          <button
+            onClick={() => setActiveTab('collections')}
+            className={`${
+              activeTab === 'collections' ? 'flex-1' : ''
+            } px-3 py-2.5 text-sm font-medium rounded-md transition-all flex items-center justify-center gap-1.5 ${
+              activeTab === 'collections'
+                ? 'bg-aki-accent text-white shadow-sm'
+                : 'text-aki-text-muted hover:bg-aki-border hover:text-aki-text'
+            }`}
+          >
+            <Folder size={14} />
+            {activeTab === 'collections' && 'Collections'}
           </button>
           <button
             onClick={() => setActiveTab('history')}
-            className={`flex-1 px-3 py-2 text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2 ${
+            className={`${
+              activeTab === 'history' ? 'flex-1' : ''
+            } px-3 py-2.5 text-sm font-medium rounded-md transition-all flex items-center justify-center gap-1.5 ${
               activeTab === 'history'
-                ? 'bg-aki-border text-aki-text'
-                : 'text-aki-text-muted hover:bg-aki-border'
+                ? 'bg-aki-accent text-white shadow-sm'
+                : 'text-aki-text-muted hover:bg-aki-border hover:text-aki-text'
             }`}
           >
-            <Clock size={16} />
-            History
+            <Clock size={14} />
+            {activeTab === 'history' && 'History'}
           </button>
         </div>
       </div>
 
-      {/* Filter/Search Bar - Only for collections tab */}
-      {activeTab === 'collections' && collections.length > 0 && (
+      {/* Filter/Search Bar - Only for collections and API tabs */}
+      {(activeTab === 'collections' && collections.length > 0) || (activeTab === 'api' && openApiDocuments.length > 0) ? (
         <div className="p-2 border-b border-aki-border">
           <div className="flex items-center gap-2">
             <div className="flex-1 relative">
               <input
                 type="text"
-                placeholder="Search requests..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder={activeTab === 'collections' ? "Search requests..." : "Search API specs..."}
+                value={activeTab === 'collections' ? searchQuery : apiSearchQuery}
+                onChange={(e) => {
+                  if (activeTab === 'collections') {
+                    setSearchQuery(e.target.value);
+                  } else {
+                    setApiSearchQuery(e.target.value);
+                  }
+                }}
                 className="w-full pl-3 pr-7 py-1.5 text-sm bg-aki-bg border border-aki-border rounded focus:outline-none focus:border-aki-accent"
               />
-              {searchQuery && (
+              {((activeTab === 'collections' && searchQuery) || (activeTab === 'api' && apiSearchQuery)) && (
                 <button
-                  onClick={() => setSearchQuery('')}
+                  onClick={() => {
+                    if (activeTab === 'collections') {
+                      setSearchQuery('');
+                    } else {
+                      setApiSearchQuery('');
+                    }
+                  }}
                   className="absolute right-2 top-1/2 -translate-y-1/2 text-aki-text-muted hover:text-aki-text"
                 >
                   <X size={14} />
                 </button>
               )}
             </div>
-            <Tooltip content="Expand All">
-              <button
-                onClick={handleExpandAll}
-                className="p-1.5 rounded border border-aki-border text-aki-text-muted hover:text-aki-text hover:bg-aki-border"
-              >
-                <ChevronDown size={14} />
-              </button>
-            </Tooltip>
-            <Tooltip content="Collapse All">
-              <button
-                onClick={handleCollapseAll}
-                className="p-1.5 rounded border border-aki-border text-aki-text-muted hover:text-aki-text hover:bg-aki-border"
-              >
-                <ChevronUp size={14} />
-              </button>
-            </Tooltip>
-            <Tooltip content="Import Collection">
-              <button
-                onClick={onImport}
-                className="p-1.5 rounded border border-aki-border text-aki-text-muted hover:text-aki-text hover:bg-aki-border"
-              >
-                <Upload size={14} />
-              </button>
-            </Tooltip>
+            {activeTab === 'collections' && (
+              <>
+                <Tooltip content="Expand All">
+                  <button
+                    onClick={handleExpandAll}
+                    className="p-1.5 rounded border border-aki-border text-aki-text-muted hover:text-aki-text hover:bg-aki-border"
+                  >
+                    <ChevronDown size={14} />
+                  </button>
+                </Tooltip>
+                <Tooltip content="Collapse All">
+                  <button
+                    onClick={handleCollapseAll}
+                    className="p-1.5 rounded border border-aki-border text-aki-text-muted hover:text-aki-text hover:bg-aki-border"
+                  >
+                    <ChevronUp size={14} />
+                  </button>
+                </Tooltip>
+                <Tooltip content="Import Collection">
+                  <button
+                    onClick={onImport}
+                    className="p-1.5 rounded border border-aki-border text-aki-text-muted hover:text-aki-text hover:bg-aki-border"
+                  >
+                    <Upload size={14} />
+                  </button>
+                </Tooltip>
+              </>
+            )}
             <div className="relative">
               <Tooltip content="Filter & Sort">
                 <button
-                  onClick={() => setShowFilterMenu(!showFilterMenu)}
-                  className={`p-1.5 rounded border ${hasActiveFilters ? 'bg-aki-accent/20 border-aki-accent text-aki-accent' : 'border-aki-border text-aki-text-muted hover:text-aki-text hover:bg-aki-border'}`}
+                  onClick={() => {
+                    if (activeTab === 'collections') {
+                      setShowFilterMenu(!showFilterMenu);
+                    } else {
+                      setShowApiFilterMenu(!showApiFilterMenu);
+                    }
+                  }}
+                  className={`p-1.5 rounded border ${
+                    (activeTab === 'collections' && hasActiveFilters) || 
+                    (activeTab === 'api' && (apiSearchQuery || apiFilterFormat !== 'all' || apiSortOption !== 'created'))
+                      ? 'bg-aki-accent/20 border-aki-accent text-aki-accent' 
+                      : 'border-aki-border text-aki-text-muted hover:text-aki-text hover:bg-aki-border'
+                  }`}
                 >
                   <Filter size={14} />
                 </button>
               </Tooltip>
-              {showFilterMenu && (
+              {activeTab === 'collections' && showFilterMenu && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setShowFilterMenu(false)} />
                   <div className="absolute right-0 top-full mt-1 z-50 bg-aki-card border border-aki-border rounded-lg shadow-xl py-2 min-w-[180px]">
@@ -1057,10 +1258,67 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
                   </div>
                 </>
               )}
+              {activeTab === 'api' && showApiFilterMenu && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowApiFilterMenu(false)} />
+                  <div className="absolute right-0 top-full mt-1 z-50 bg-aki-card border border-aki-border rounded-lg shadow-xl py-2 min-w-[180px]">
+                    <div className="px-3 py-1 text-xs font-medium text-aki-text-muted uppercase">Filter by Format</div>
+                    {(['all', 'yaml', 'json'] as const).map((format) => (
+                      <button
+                        key={format}
+                        className={`w-full px-3 py-1.5 text-left text-sm hover:bg-aki-border flex items-center gap-2 ${apiFilterFormat === format ? 'text-aki-accent' : ''}`}
+                        onClick={() => {
+                          setApiFilterFormat(format);
+                        }}
+                      >
+                        {format === 'all' ? 'All Formats' : format.toUpperCase()}
+                        {apiFilterFormat === format && <span className="ml-auto">✓</span>}
+                      </button>
+                    ))}
+                    <hr className="my-2 border-aki-border" />
+                    <div className="px-3 py-1 text-xs font-medium text-aki-text-muted uppercase flex items-center gap-1">
+                      <ArrowUpDown size={12} /> Sort by
+                    </div>
+                    {([
+                      { value: 'created', label: 'Created Order' },
+                      { value: 'name-asc', label: 'Name (A-Z)' },
+                      { value: 'name-desc', label: 'Name (Z-A)' },
+                      { value: 'format', label: 'Format' },
+                    ] as const).map((option) => (
+                      <button
+                        key={option.value}
+                        className={`w-full px-3 py-1.5 text-left text-sm hover:bg-aki-border flex items-center gap-2 ${apiSortOption === option.value ? 'text-aki-accent' : ''}`}
+                        onClick={() => {
+                          setApiSortOption(option.value);
+                        }}
+                      >
+                        {option.label}
+                        {apiSortOption === option.value && <span className="ml-auto">✓</span>}
+                      </button>
+                    ))}
+                    {(apiSearchQuery || apiFilterFormat !== 'all' || apiSortOption !== 'created') && (
+                      <>
+                        <hr className="my-2 border-aki-border" />
+                        <button
+                          className="w-full px-3 py-1.5 text-left text-sm hover:bg-aki-border text-red-400"
+                          onClick={() => {
+                            setApiSearchQuery('');
+                            setApiFilterFormat('all');
+                            setApiSortOption('created');
+                            setShowApiFilterMenu(false);
+                          }}
+                        >
+                          Clear All Filters
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>
-      )}
+      ) : null}
 
       {/* Content list */}
       <div className="flex-1 overflow-y-auto p-2">
@@ -1082,35 +1340,175 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
             </button>
           </div>
         ) : activeTab === 'collections' ? (
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragStart={handleDragStart}
-            onDragOver={handleDragOver}
-            onDragEnd={handleDragEnd}
-          >
-            <SortableContext items={collectionIds} strategy={verticalListSortingStrategy}>
-              {filteredCollections.map(renderCollection)}
-            </SortableContext>
-            <DragOverlay>
-              {activeId && activeDragData && (
-                <div className="bg-aki-card border border-aki-accent rounded px-3 py-2 shadow-lg opacity-90">
-                  <span className="text-sm text-aki-text">
-                    {activeDragData.type === 'collection' && collections.find(c => c.id === activeDragData.id)?.name}
-                    {activeDragData.type === 'request' && 'Moving request...'}
-                    {activeDragData.type === 'folder' && 'Moving folder...'}
-                  </span>
-                </div>
-              )}
-            </DragOverlay>
-          </DndContext>
-        ) : history.length === 0 ? (
+          <div>
+            {/* Collections Section Header */}
+            <div className="flex items-center justify-between mb-3 px-1">
+              <span className="text-xs text-aki-text-muted">
+                {filteredCollections.length} collection{filteredCollections.length !== 1 ? 's' : ''}
+                {filteredCollections.length !== collections.length && (
+                  <span className="text-aki-text-muted"> ({collections.length} total)</span>
+                )}
+              </span>
+              <button
+                onClick={handleAddCollection}
+                className="text-xs text-aki-accent hover:text-aki-accent/80 flex items-center gap-1"
+              >
+                <Plus size={12} /> New Collection
+              </button>
+            </div>
+
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragStart={handleDragStart}
+              onDragOver={handleDragOver}
+              onDragEnd={handleDragEnd}
+            >
+              <SortableContext items={collectionIds} strategy={verticalListSortingStrategy}>
+                {filteredCollections.map(renderCollection)}
+              </SortableContext>
+              <DragOverlay>
+                {activeId && activeDragData && (
+                  <div className="bg-aki-card border border-aki-accent rounded px-3 py-2 shadow-lg opacity-90">
+                    <span className="text-sm text-aki-text">
+                      {activeDragData.type === 'collection' && collections.find(c => c.id === activeDragData.id)?.name}
+                      {activeDragData.type === 'request' && 'Moving request...'}
+                      {activeDragData.type === 'folder' && 'Moving folder...'}
+                    </span>
+                  </div>
+                )}
+              </DragOverlay>
+            </DndContext>
+          </div>
+        ) : activeTab === 'api' ? (
+          <div>
+            {/* API Section Header */}
+            <div className="flex items-center justify-between mb-3 px-1">
+              <span className="text-xs text-aki-text-muted">
+                {filteredApiDocuments.length} spec{filteredApiDocuments.length !== 1 ? 's' : ''}
+                {filteredApiDocuments.length !== openApiDocuments.length && (
+                  <span className="text-aki-text-muted"> ({openApiDocuments.length} total)</span>
+                )}
+              </span>
+              <button
+                onClick={() => {
+                  const doc = addOpenApiDocument('New API Spec');
+                  openTab({
+                    type: 'openapi',
+                    title: doc.name,
+                    openApiDocId: doc.id,
+                  });
+                }}
+                className="text-xs text-aki-accent hover:text-aki-accent/80 flex items-center gap-1"
+              >
+                <Plus size={12} /> New Spec
+              </button>
+            </div>
+
+            {openApiDocuments.length === 0 ? (
+              <div className="text-center py-8 text-aki-text-muted">
+                <FileCode size={32} className="mx-auto mb-4 opacity-50" />
+                <p className="text-sm mb-2">No OpenAPI specs yet</p>
+                <p className="text-xs mb-4">Create a new spec to get started</p>
+                <button
+                  onClick={() => {
+                    const doc = addOpenApiDocument('New API Spec');
+                    openTab({
+                      type: 'openapi',
+                      title: doc.name,
+                      openApiDocId: doc.id,
+                    });
+                  }}
+                  className="btn btn-primary text-sm"
+                >
+                  Create OpenAPI Spec
+                </button>
+              </div>
+            ) : filteredApiDocuments.length === 0 ? (
+              <div className="text-center py-8 text-aki-text-muted">
+                <FileCode size={32} className="mx-auto mb-4 opacity-50" />
+                <p className="text-sm mb-2">No matching specs found</p>
+                <p className="text-xs">Try adjusting your search or filters</p>
+              </div>
+            ) : (
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragStart={handleDragStart}
+                onDragOver={handleDragOver}
+                onDragEnd={handleDragEnd}
+              >
+                <SortableContext
+                  items={filteredApiDocuments.map(doc => `api-doc-${doc.id}`)}
+                  strategy={verticalListSortingStrategy}
+                >
+                  <div className="space-y-1">
+                    {filteredApiDocuments.map((doc) => (
+                      <SortableApiDocItem
+                        key={doc.id}
+                        doc={doc}
+                        onClick={() => {
+                          if (editingApiSpecId !== doc.id) {
+                            openTab({
+                              type: 'openapi',
+                              title: doc.name,
+                              openApiDocId: doc.id,
+                            });
+                          }
+                        }}
+                        onEdit={(e) => {
+                          e.stopPropagation();
+                          setEditingApiSpecId(doc.id);
+                          setEditingApiSpecName(doc.name);
+                          setTimeout(() => apiSpecInputRef.current?.focus(), 0);
+                        }}
+                        onDelete={(e) => {
+                          e.stopPropagation();
+                          if (confirm('Delete this OpenAPI spec?')) {
+                            deleteOpenApiDocument(doc.id);
+                          }
+                        }}
+                        editingId={editingApiSpecId}
+                        editingName={editingApiSpecName}
+                        setEditingName={setEditingApiSpecName}
+                        inputRef={apiSpecInputRef}
+                        onEditComplete={() => {
+                          if (editingApiSpecName.trim()) {
+                            const newName = editingApiSpecName.trim();
+                            updateOpenApiDocument(doc.id, { name: newName });
+
+                            // Update all tabs with this openApiDocId to reflect the new name
+                            tabs.forEach(tab => {
+                              if (tab.openApiDocId === doc.id) {
+                                updateTab(tab.id, { title: newName });
+                              }
+                            });
+                          }
+                          setEditingApiSpecId(null);
+                        }}
+                      />
+                    ))}
+                  </div>
+                </SortableContext>
+                <DragOverlay>
+                  {activeId && activeDragData && activeDragData.type === 'api-doc' && (
+                    <div className="bg-aki-card border border-aki-accent rounded px-3 py-2 shadow-lg opacity-90">
+                      <span className="text-sm text-aki-text">
+                        {filteredApiDocuments.find(doc => doc.id === activeDragData.id)?.name || 'Moving spec...'}
+                      </span>
+                    </div>
+                  )}
+                </DragOverlay>
+              </DndContext>
+            )}
+          </div>
+        ) : activeTab === 'history' && history.length === 0 ? (
           <div className="text-center py-8 text-aki-text-muted">
             <Clock size={32} className="mx-auto mb-4 opacity-50" />
             <p className="text-sm mb-2">No request history yet</p>
             <p className="text-xs">Your past requests will appear here</p>
           </div>
-        ) : (
+        ) : activeTab === 'history' ? (
           <div>
             <div className="flex items-center justify-between mb-2 px-1">
               <span className="text-xs text-aki-text-muted">{history.length} request{history.length !== 1 ? 's' : ''}</span>
@@ -1123,7 +1521,7 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
             </div>
             {history.map(renderHistoryItem)}
           </div>
-        )}
+        ) : null}
       </div>
 
       {/* Context Menu */}
@@ -1293,98 +1691,150 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
                 </button>
               </>
             )}
-            {contextMenu.type === 'request' && (
-              <>
-                <button
-                  className="w-full px-3 py-2 text-left text-sm hover:bg-aki-border flex items-center gap-2"
-                  onClick={() => {
-                    duplicateRequest(contextMenu.collectionId, contextMenu.requestId!);
-                    closeContextMenu();
-                  }}
-                >
-                  <Copy size={14} /> Duplicate
-                </button>
-                <button
-                  className="w-full px-3 py-2 text-left text-sm hover:bg-aki-border flex items-center gap-2"
-                  onClick={() => {
-                    // Find the request to edit
-                    const collection = collections.find(c => c.id === contextMenu.collectionId);
-                    if (collection) {
-                      const findRequest = (folders: typeof collection.folders, requests: typeof collection.requests): ApiRequest | null => {
-                        // Check in root requests
-                        const request = requests.find(r => r.id === contextMenu.requestId);
-                        if (request) return request;
+            {contextMenu.type === 'request' && (() => {
+              const collection = collections.find(c => c.id === contextMenu.collectionId);
+              if (!collection) return null;
 
-                        // Check in folders
-                        for (const folder of folders) {
-                          const folderRequest = findRequest(folder.folders, folder.requests);
-                          if (folderRequest) return folderRequest;
-                        }
-                        return null;
-                      };
+              const findParent = (
+                folders: RequestFolder[],
+                folderId: string | undefined
+              ): { requests: ApiRequest[] } | null => {
+                if (!folderId) return collection;
+                for (const folder of folders) {
+                  if (folder.id === folderId) return folder;
+                  const found = findParent(folder.folders, folderId);
+                  if (found) return found;
+                }
+                return null;
+              };
 
-                      const request = findRequest(collection.folders, collection.requests);
-                      if (request) {
-                        setEditingId(request.id);
-                        setEditingName(request.name);
-                        closeContextMenu();
-                        setTimeout(() => inputRef.current?.focus(), 0);
-                      }
-                    }
-                  }}
-                >
-                  <Edit2 size={14} /> Rename
-                </button>
-                {collections.length > 1 && (
-                  <div className="relative">
+              const parent = findParent(collection.folders, contextMenu.folderId);
+              if (!parent) return null;
+
+              const requestIndex = parent.requests.findIndex(r => r.id === contextMenu.requestId);
+              if (requestIndex === -1) return null;
+
+              const canMoveUp = requestIndex > 0;
+              const canMoveDown = requestIndex < parent.requests.length - 1;
+
+              return (
+                <>
+                  {canMoveUp && (
                     <button
-                      className="w-full px-3 py-2 text-left text-sm hover:bg-aki-border flex items-center gap-2 justify-between"
-                      onClick={() => setShowMoveToMenu(!showMoveToMenu)}
+                      className="w-full px-3 py-2 text-left text-sm hover:bg-aki-border flex items-center gap-2"
+                      onClick={() => {
+                        setSortOption('created');
+                        reorderRequests(contextMenu.collectionId, contextMenu.folderId || null, requestIndex, requestIndex - 1);
+                        closeContextMenu();
+                      }}
                     >
-                      <span className="flex items-center gap-2">
-                        <MoveRight size={14} /> Move to
-                      </span>
-                      <ChevronRight size={14} />
+                      <ChevronUp size={14} /> Move Up
                     </button>
-                    {showMoveToMenu && (
-                      <div className="absolute left-full top-0 ml-1 bg-aki-card border border-aki-border rounded-lg shadow-xl py-1 min-w-[160px] z-50">
-                        {collections
-                          .filter(c => c.id !== contextMenu.collectionId)
-                          .map(targetCollection => (
-                            <button
-                              key={targetCollection.id}
-                              className="w-full px-3 py-2 text-left text-sm hover:bg-aki-border flex items-center gap-2"
-                              onClick={() => {
-                                moveRequest(
-                                  contextMenu.collectionId,
-                                  contextMenu.folderId || null,
-                                  targetCollection.id,
-                                  null,
-                                  contextMenu.requestId!
-                                );
-                                closeContextMenu();
-                              }}
-                            >
-                              <Folder size={14} className="text-yellow-400" />
-                              <span className="truncate">{targetCollection.name}</span>
-                            </button>
-                          ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-                <hr className="my-1 border-aki-border" />
-                <button
-                  className="w-full px-3 py-2 text-left text-sm hover:bg-aki-border flex items-center gap-2 text-red-400"
-                  onClick={() => {
-                    deleteRequest(contextMenu.collectionId, contextMenu.requestId!);
-                    closeContextMenu();
-                  }}
-                >
-                  <Trash2 size={14} /> Delete
-                </button>
-              </>
-            )}
+                  )}
+                  {canMoveDown && (
+                    <button
+                      className="w-full px-3 py-2 text-left text-sm hover:bg-aki-border flex items-center gap-2"
+                      onClick={() => {
+                        setSortOption('created');
+                        reorderRequests(contextMenu.collectionId, contextMenu.folderId || null, requestIndex, requestIndex + 1);
+                        closeContextMenu();
+                      }}
+                    >
+                      <ChevronDown size={14} /> Move Down
+                    </button>
+                  )}
+                  {(canMoveUp || canMoveDown) && <hr className="my-1 border-aki-border" />}
+                  <button
+                    className="w-full px-3 py-2 text-left text-sm hover:bg-aki-border flex items-center gap-2"
+                    onClick={() => {
+                      duplicateRequest(contextMenu.collectionId, contextMenu.requestId!);
+                      closeContextMenu();
+                    }}
+                  >
+                    <Copy size={14} /> Duplicate
+                  </button>
+                  <button
+                    className="w-full px-3 py-2 text-left text-sm hover:bg-aki-border flex items-center gap-2"
+                    onClick={() => {
+                      // Find the request to edit
+                      const collection = collections.find(c => c.id === contextMenu.collectionId);
+                      if (collection) {
+                        const findRequest = (folders: typeof collection.folders, requests: typeof collection.requests): ApiRequest | null => {
+                          // Check in root requests
+                          const request = requests.find(r => r.id === contextMenu.requestId);
+                          if (request) return request;
+
+                          // Check in folders
+                          for (const folder of folders) {
+                            const folderRequest = findRequest(folder.folders, folder.requests);
+                            if (folderRequest) return folderRequest;
+                          }
+                          return null;
+                        };
+
+                        const request = findRequest(collection.folders, collection.requests);
+                        if (request) {
+                          setEditingId(request.id);
+                          setEditingName(request.name);
+                          closeContextMenu();
+                          setTimeout(() => inputRef.current?.focus(), 0);
+                        }
+                      }
+                    }}
+                  >
+                    <Edit2 size={14} /> Rename
+                  </button>
+                  {collections.length > 1 && (
+                    <div className="relative">
+                      <button
+                        className="w-full px-3 py-2 text-left text-sm hover:bg-aki-border flex items-center gap-2 justify-between"
+                        onClick={() => setShowMoveToMenu(!showMoveToMenu)}
+                      >
+                        <span className="flex items-center gap-2">
+                          <MoveRight size={14} /> Move to
+                        </span>
+                        <ChevronRight size={14} />
+                      </button>
+                      {showMoveToMenu && (
+                        <div className="absolute left-full top-0 ml-1 bg-aki-card border border-aki-border rounded-lg shadow-xl py-1 min-w-[160px] z-50">
+                          {collections
+                            .filter(c => c.id !== contextMenu.collectionId)
+                            .map(targetCollection => (
+                              <button
+                                key={targetCollection.id}
+                                className="w-full px-3 py-2 text-left text-sm hover:bg-aki-border flex items-center gap-2"
+                                onClick={() => {
+                                  moveRequest(
+                                    contextMenu.collectionId,
+                                    contextMenu.folderId || null,
+                                    targetCollection.id,
+                                    null,
+                                    contextMenu.requestId!
+                                  );
+                                  closeContextMenu();
+                                }}
+                              >
+                                <Folder size={14} className="text-yellow-400" />
+                                <span className="truncate">{targetCollection.name}</span>
+                              </button>
+                            ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <hr className="my-1 border-aki-border" />
+                  <button
+                    className="w-full px-3 py-2 text-left text-sm hover:bg-aki-border flex items-center gap-2 text-red-400"
+                    onClick={() => {
+                      deleteRequest(contextMenu.collectionId, contextMenu.requestId!);
+                      closeContextMenu();
+                    }}
+                  >
+                    <Trash2 size={14} /> Delete
+                  </button>
+                </>
+              );
+            })()}
           </div>
         </>
       )}

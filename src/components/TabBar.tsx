@@ -1,13 +1,14 @@
-import { X, Clock } from 'lucide-react';
+import { X, Clock, FileCode } from 'lucide-react';
 import { useAppStore } from '../store/appStore';
 import { getMethodBgColor } from '../utils/helpers';
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 
 export default function TabBar() {
   const { tabs, activeTabId, setActiveTab, closeTab, getRequest } = useAppStore();
   const [hoveredTab, setHoveredTab] = useState<string | null>(null);
   const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 });
   const tabRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
+  const [contextMenu, setContextMenu] = useState<{ tabId: string; x: number; y: number } | null>(null);
 
   const handleMouseEnter = (tabId: string) => {
     const tabElement = tabRefs.current[tabId];
@@ -17,9 +18,49 @@ export default function TabBar() {
         x: rect.left + rect.width / 2,
         y: rect.top - 8,
       });
+      setHoveredTab(tabId);
     }
-    setHoveredTab(tabId);
   };
+
+  const handleContextMenu = (e: React.MouseEvent, tabId: string) => {
+    e.preventDefault();
+    setContextMenu({ tabId, x: e.clientX, y: e.clientY });
+    setHoveredTab(null); // Hide tooltip when context menu opens
+  };
+
+  const handleCloseTabsToRight = (tabId: string) => {
+    const index = tabs.findIndex(t => t.id === tabId);
+    const tabsToClose = tabs.slice(index + 1);
+    tabsToClose.forEach(tab => closeTab(tab.id));
+    setContextMenu(null);
+  };
+
+  const handleCloseTabsToLeft = (tabId: string) => {
+    const index = tabs.findIndex(t => t.id === tabId);
+    const tabsToClose = tabs.slice(0, index);
+    tabsToClose.forEach(tab => closeTab(tab.id));
+    setContextMenu(null);
+  };
+
+  const handleCloseOtherTabs = (tabId: string) => {
+    const tabsToClose = tabs.filter(t => t.id !== tabId);
+    tabsToClose.forEach(tab => closeTab(tab.id));
+    setContextMenu(null);
+  };
+
+  const handleCloseAllTabs = () => {
+    tabs.forEach(tab => closeTab(tab.id));
+    setContextMenu(null);
+  };
+
+  // Close context menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = () => setContextMenu(null);
+    if (contextMenu) {
+      document.addEventListener('click', handleClickOutside);
+      return () => document.removeEventListener('click', handleClickOutside);
+    }
+  }, [contextMenu]);
 
   if (tabs.length === 0) return null;
 
@@ -36,6 +77,47 @@ export default function TabBar() {
           }}
         >
           {tabs.find(t => t.id === hoveredTab)?.title}
+        </div>
+      )}
+
+      {/* Context Menu */}
+      {contextMenu && (
+        <div
+          className="fixed bg-aki-sidebar border border-aki-border rounded-lg shadow-xl py-1 z-[10000] min-w-[180px]"
+          style={{
+            left: `${contextMenu.x}px`,
+            top: `${contextMenu.y}px`,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            className="w-full px-4 py-2 text-left text-sm text-aki-text hover:bg-aki-bg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            onClick={() => handleCloseTabsToRight(contextMenu.tabId)}
+            disabled={tabs.findIndex(t => t.id === contextMenu.tabId) === tabs.length - 1}
+          >
+            Close Tabs to Right
+          </button>
+          <button
+            className="w-full px-4 py-2 text-left text-sm text-aki-text hover:bg-aki-bg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            onClick={() => handleCloseTabsToLeft(contextMenu.tabId)}
+            disabled={tabs.findIndex(t => t.id === contextMenu.tabId) === 0}
+          >
+            Close Tabs to Left
+          </button>
+          <button
+            className="w-full px-4 py-2 text-left text-sm text-aki-text hover:bg-aki-bg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            onClick={() => handleCloseOtherTabs(contextMenu.tabId)}
+            disabled={tabs.length === 1}
+          >
+            Close Other Tabs
+          </button>
+          <div className="border-t border-aki-border my-1" />
+          <button
+            className="w-full px-4 py-2 text-left text-sm text-aki-text hover:bg-aki-bg transition-colors"
+            onClick={handleCloseAllTabs}
+          >
+            Close All Tabs
+          </button>
         </div>
       )}
 
@@ -60,6 +142,14 @@ export default function TabBar() {
               isActive ? 'bg-aki-bg' : 'bg-aki-sidebar hover:bg-aki-bg/50'
             }`}
             onClick={() => setActiveTab(tab.id)}
+            onContextMenu={(e) => handleContextMenu(e, tab.id)}
+            onMouseDown={(e) => {
+              // Middle click (button 1) closes the tab
+              if (e.button === 1) {
+                e.preventDefault();
+                closeTab(tab.id);
+              }
+            }}
             onMouseEnter={() => handleMouseEnter(tab.id)}
             onMouseLeave={() => setHoveredTab(null)}
           >
@@ -69,6 +159,15 @@ export default function TabBar() {
                 className="flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium bg-blue-500/20 text-blue-400 rounded border border-blue-500/30 shrink-0"
               >
                 <Clock size={10} />
+              </span>
+            )}
+
+            {/* OpenAPI Badge */}
+            {tab.type === 'openapi' && (
+              <span
+                className="flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium bg-purple-500/20 text-purple-400 rounded border border-purple-500/30 shrink-0"
+              >
+                <FileCode size={10} />
               </span>
             )}
 

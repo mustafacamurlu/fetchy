@@ -15,6 +15,7 @@ import UpdateModal from './components/UpdateModal';
 import ThemeToggle from './components/ThemeToggle';
 import ResizeHandle from './components/ResizeHandle';
 import Tooltip from './components/Tooltip';
+import OpenApiEditor from './components/OpenApiEditor';
 import { useAppStore } from './store/appStore';
 import { usePreferencesStore } from './store/preferencesStore';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
@@ -60,6 +61,7 @@ function App() {
 
   const activeTab = tabs.find(t => t.id === activeTabId);
   const hasActiveRequest = activeTab?.type === 'request';
+  const hasActiveOpenApi = activeTab?.type === 'openapi';
 
   // Load history response/request when switching to a history tab
   useEffect(() => {
@@ -257,6 +259,10 @@ function App() {
                   isLoading={isLoading}
                 />
               </div>
+            </div>
+          ) : hasActiveOpenApi ? (
+            <div className="flex-1 overflow-hidden">
+              <OpenApiEditor documentId={activeTab?.openApiDocId} />
             </div>
           ) : (
             <WelcomeScreen onImport={handleImport} />
