@@ -1,4 +1,4 @@
-import { X, Clock } from 'lucide-react';
+import { X, Clock, FileCode } from 'lucide-react';
 import { useAppStore } from '../store/appStore';
 import { getMethodBgColor } from '../utils/helpers';
 import { useState, useRef, useEffect } from 'react';
@@ -159,6 +159,15 @@ export default function TabBar() {
                 className="flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium bg-blue-500/20 text-blue-400 rounded border border-blue-500/30 shrink-0"
               >
                 <Clock size={10} />
+              </span>
+            )}
+
+            {/* OpenAPI Badge */}
+            {tab.type === 'openapi' && (
+              <span
+                className="flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium bg-purple-500/20 text-purple-400 rounded border border-purple-500/30 shrink-0"
+              >
+                <FileCode size={10} />
               </span>
             )}
 

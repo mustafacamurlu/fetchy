@@ -10,6 +10,7 @@ import {
   TabState,
   RequestHistoryItem,
   HttpMethod,
+  OpenAPIDocument,
 } from '../types';
 
 // Check if running in Electron
@@ -169,6 +170,14 @@ interface AppStore {
 
   // Toggle collection expanded
   toggleCollectionExpanded: (id: string) => void;
+
+  // OpenAPI Documents
+  openApiDocuments: OpenAPIDocument[];
+  addOpenApiDocument: (name: string, content?: string, format?: 'yaml' | 'json') => OpenAPIDocument;
+  updateOpenApiDocument: (id: string, updates: Partial<OpenAPIDocument>) => void;
+  deleteOpenApiDocument: (id: string) => void;
+  getOpenApiDocument: (id: string) => OpenAPIDocument | null;
+  reorderOpenApiDocuments: (fromIndex: number, toIndex: number) => void;
 }
 
 const createDefaultRequest = (overrides?: Partial<ApiRequest>): ApiRequest => ({
@@ -1118,6 +1127,59 @@ export const useAppStore = create<AppStore>()(
           state.activeRequest = null;
         });
       },
+
+      // OpenAPI Documents
+      openApiDocuments: [],
+
+      addOpenApiDocument: (name: string, content?: string, format?: 'yaml' | 'json') => {
+        const doc: OpenAPIDocument = {
+          id: uuidv4(),
+          name,
+          content: content || '',
+          format: format || 'yaml',
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+        set(state => {
+          state.openApiDocuments.push(doc);
+        });
+        return doc;
+      },
+
+      updateOpenApiDocument: (id: string, updates: Partial<OpenAPIDocument>) => {
+        set(state => {
+          const index = state.openApiDocuments.findIndex(d => d.id === id);
+          if (index !== -1) {
+            state.openApiDocuments[index] = {
+              ...state.openApiDocuments[index],
+              ...updates,
+              updatedAt: Date.now(),
+            };
+          }
+        });
+      },
+
+      deleteOpenApiDocument: (id: string) => {
+        set(state => {
+          state.openApiDocuments = state.openApiDocuments.filter(d => d.id !== id);
+          // Close any tabs for this document
+          state.tabs = state.tabs.filter(t => t.openApiDocId !== id);
+        });
+      },
+
+      getOpenApiDocument: (id: string) => {
+        const state = get();
+        return state.openApiDocuments.find(d => d.id === id) || null;
+      },
+
+      reorderOpenApiDocuments: (fromIndex: number, toIndex: number) => {
+        set(state => {
+          const docs = [...state.openApiDocuments];
+          const [moved] = docs.splice(fromIndex, 1);
+          docs.splice(toIndex, 0, moved);
+          state.openApiDocuments = docs;
+        });
+      },
     })),
     {
       name: 'fetchy-storage',
@@ -1131,6 +1193,7 @@ export const useAppStore = create<AppStore>()(
         sidebarCollapsed: state.sidebarCollapsed,
         requestPanelWidth: state.requestPanelWidth,
         panelLayout: state.panelLayout,
+        openApiDocuments: state.openApiDocuments,
       }),
     }
   )

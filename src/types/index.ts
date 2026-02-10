@@ -202,15 +202,26 @@ export interface PostmanAuth {
   apikey?: Array<{ key: string; value: string }> | Record<string, string>;
 }
 
+// OpenAPI Document for storage
+export interface OpenAPIDocument {
+  id: string;
+  name: string;
+  content: string;
+  format: 'yaml' | 'json';
+  createdAt: number;
+  updatedAt: number;
+}
+
 // App state types
 export interface TabState {
   id: string;
-  type: 'request' | 'collection' | 'environment';
+  type: 'request' | 'collection' | 'environment' | 'openapi';
   title: string;
   requestId?: string;
   collectionId?: string;
   folderId?: string;
   environmentId?: string;
+  openApiDocId?: string; // For OpenAPI editor tabs
   isModified?: boolean;
   isHistoryItem?: boolean; // Flag to indicate this tab is loaded from history
   historyRequest?: ApiRequest; // Store the original history request data
