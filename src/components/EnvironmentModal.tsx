@@ -217,8 +217,8 @@ function SortableVariableRow({
         <button
           onClick={() => onUpdate(variable.id, { isSecret: !variable.isSecret })}
           className={`p-1.5 rounded transition-colors ${
-            variable.isSecret 
-              ? 'bg-orange-500/20 text-orange-400 hover:bg-orange-500/30' 
+            variable.isSecret
+              ? 'bg-orange-500/20 text-orange-400 hover:bg-orange-500/30'
               : 'hover:bg-aki-border text-aki-text-muted hover:text-aki-text'
           }`}
           title={variable.isSecret ? 'Secret (value hidden in history)' : 'Not secret (click to make secret)'}
