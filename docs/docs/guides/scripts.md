@@ -19,17 +19,19 @@ Run a full auth flow automatically before testing protected endpoints:
 **Step 1:** Create a `Login` request with this **post-script (Script tab)**:
 
 ```javascript
-pm.test("Login returns 200", () => {
-  pm.expect(pm.response.status).to.equal(200);
-});
+const data = fetchy.response.data;
 
-const json = pm.response.json();
+if (fetchy.response.status === 200) {
+  console.log("✅ Login returned 200");
+} else {
+  console.log("❌ Unexpected status:", fetchy.response.status);
+}
 
-if (json.accessToken) {
-  pm.environment.set("access_token", json.accessToken);
+if (data.accessToken) {
+  fetchy.environment.set("access_token", data.accessToken);
   console.log("✅ Access token set");
 } else {
-  console.error("❌ No access token in response");
+  console.log("❌ No access token in response");
 }
 ```
 
@@ -45,15 +47,15 @@ Authorization: Bearer <<access_token>>
 Validate the structure of your responses:
 
 ```javascript
-pm.test("Response has expected shape", () => {
-  const json = pm.response.json();
+const data = fetchy.response.data;
 
-  pm.expect(json).to.have.property("id");
-  pm.expect(json).to.have.property("name");
-  pm.expect(json.id).to.be.a("number");
-  pm.expect(json.name).to.be.a("string");
-  pm.expect(json.name.length).to.be.greaterThan(0);
-});
+if (data.id && data.name) {
+  console.log("✅ Response has expected shape");
+  console.log("  id:", typeof data.id, "=", data.id);
+  console.log("  name:", typeof data.name, "=", data.name);
+} else {
+  console.log("❌ Missing expected fields — got:", Object.keys(data));
+}
 ```
 
 ---
@@ -64,7 +66,7 @@ Add a request timestamp in the pre-request script:
 
 ```javascript
 const timestamp = new Date().toISOString();
-pm.environment.set("request_timestamp", timestamp);
+fetchy.environment.set("request_timestamp", timestamp);
 console.log("Request timestamp:", timestamp);
 ```
 
@@ -78,11 +80,13 @@ Create a resource in one request, then test it in the next:
 
 **Create User (post-script):**
 ```javascript
-pm.test("User created", () => {
-  pm.expect(pm.response.status).to.equal(201);
-});
-const user = pm.response.json();
-pm.environment.set("created_user_id", user.id);
+if (fetchy.response.status === 201) {
+  console.log("✅ User created");
+} else {
+  console.log("❌ Unexpected status:", fetchy.response.status);
+}
+const user = fetchy.response.data;
+fetchy.environment.set("created_user_id", user.id);
 ```
 
 **Get User (using chained variable):**
@@ -92,16 +96,18 @@ GET <<base_url>>/users/<<created_user_id>>
 
 ---
 
-## Pattern 5 — Performance Assertions
+## Pattern 5 — Response Validation
 
 ```javascript
-pm.test("Response under 500ms", () => {
-  pm.expect(pm.response.responseTime).to.be.below(500);
-});
+// Check content-length header
+const contentLength = Number(fetchy.response.headers['content-length'] || 0);
+if (contentLength < 100000) {
+  console.log('✅ Response size under 100KB:', contentLength, 'bytes');
+} else {
+  console.log('❌ Response too large:', contentLength, 'bytes');
+}
 
-pm.test("Response size under 100KB", () => {
-  pm.expect(pm.response.headers["content-length"]).to.be.below(100000);
-});
+console.log('Status:', fetchy.response.status, fetchy.response.statusText);
 ```
 
 ---

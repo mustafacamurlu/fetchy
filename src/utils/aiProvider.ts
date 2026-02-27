@@ -137,8 +137,26 @@ export function buildGenerateScriptPrompt(
 
   const scriptPurpose =
     scriptType === 'pre-request'
-      ? 'a pre-request script that runs before the request is sent. It can set headers, modify the URL, log information, etc.'
-      : 'a test/post-request script that runs after receiving the response. It should validate the response status, check response body content, measure timing, etc.';
+      ? 'a pre-request script that runs before the request is sent. It can set environment variables, log information, generate dynamic values, etc.'
+      : 'a test/post-request script that runs after receiving the response. It should validate the response status, check response body content, extract and store values, etc.';
+
+  const preRequestAPI = `Pre-request script API:
+- fetchy.environment.get(key)        → returns the value of an environment variable
+- fetchy.environment.set(key, value) → sets an environment variable
+- fetchy.environment.all()           → returns an array of all environment variables
+- console.log(...)                   → print output to the Console tab`;
+
+  const postRequestAPI = `Post-request (test) script API:
+- fetchy.response.data               → parsed JSON response body (object)
+- fetchy.response.headers            → response headers object
+- fetchy.response.status             → HTTP status code (number, e.g. 200)
+- fetchy.response.statusText         → HTTP status text (string, e.g. "OK")
+- fetchy.environment.get(key)        → returns the value of an environment variable
+- fetchy.environment.set(key, value) → sets an environment variable
+- fetchy.environment.all()           → returns an array of all environment variables
+- console.log(...)                   → print output to the Console tab`;
+
+  const apiReference = scriptType === 'pre-request' ? preRequestAPI : postRequestAPI;
 
   return [
     {
@@ -146,12 +164,12 @@ export function buildGenerateScriptPrompt(
       content: `You are an expert API testing assistant integrated into Fetchy, a REST client application.
 Generate ${scriptPurpose}
 
-The script environment provides these globals:
-- \`pm.request\` – the request object with url, method, headers, body
-- \`pm.response\` – the response object with status, statusText, headers, body, time, size (only in test scripts)
-- \`pm.environment.get(key)\` / \`pm.environment.set(key, value)\` – environment variables
-- \`pm.variables.get(key)\` / \`pm.variables.set(key, value)\` – collection variables
-- \`console.log()\` – logging
+IMPORTANT: Fetchy uses its own scripting API. Do NOT use pm.*, postman.*, pw.*, bru.*, or any other API client globals.
+Only use the fetchy.* API described below.
+
+${apiReference}
+
+Use standard JavaScript conditionals and console.log for assertions/validation (there is no pm.test or pm.expect).
 
 Return ONLY the JavaScript code, no markdown fences, no explanation.`,
     },
