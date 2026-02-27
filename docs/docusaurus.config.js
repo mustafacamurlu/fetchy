@@ -57,7 +57,7 @@ const config = {
         title: 'Fetchy',
         logo: {
           alt: 'Fetchy Logo',
-          src: 'img/logo.svg',
+          src: 'img/logo.jpg',
         },
         items: [
           {
@@ -118,7 +118,7 @@ const config = {
             ],
           },
         ],
-        copyright: `Copyright © ${new Date().getFullYear()} Fetchy. Built with Docusaurus.`,
+        copyright: `Copyright © ${new Date().getFullYear()} Fetchy.`,
       },
       prism: {
         theme: lightCodeTheme,

@@ -25,52 +25,52 @@ Each request has two script tabs:
 
 ## Script API Reference
 
-### `pm.environment`
+### `fetchy.environment`
 
 ```javascript
 // Read a variable
-const baseUrl = pm.environment.get("base_url");
+const baseUrl = fetchy.environment.get("base_url");
 
 // Write a variable
-pm.environment.set("access_token", "my-token-value");
+fetchy.environment.set("access_token", "my-token-value");
+
+// Get all environment variables
+const allVars = fetchy.environment.all();
 ```
 
-### `pm.request`
-
-```javascript
-// Access request details
-const method = pm.request.method;        // "GET", "POST", etc.
-const url = pm.request.url;              // Full URL string
-const headers = pm.request.headers;     // Headers object
-const body = pm.request.body;           // Request body
-```
-
-### `pm.response`
+### `fetchy.response` (Post-Script only)
 
 ```javascript
 // Access response data
-const status = pm.response.status;      // 200
-const time = pm.response.responseTime;  // milliseconds
-const body = pm.response.text();        // response as string
-const json = pm.response.json();        // parsed JSON object
-const headers = pm.response.headers;   // response headers
+const data = fetchy.response.data;        // parsed JSON response body
+const status = fetchy.response.status;    // HTTP status code (number)
+const text = fetchy.response.statusText;  // HTTP status text
+const headers = fetchy.response.headers;  // response headers object
 ```
 
-### `pm.test` — Assertions
+### Assertions & Validation
+
+Use standard JavaScript conditionals and `console.log` for validation:
 
 ```javascript
-pm.test("Status is 200", () => {
-  pm.expect(pm.response.status).to.equal(200);
-});
+// Check status code
+if (fetchy.response.status === 200) {
+  console.log('✅ Status is 200');
+} else {
+  console.log('❌ Unexpected status:', fetchy.response.status);
+}
 
-pm.test("Response has user id", () => {
-  const json = pm.response.json();
-  pm.expect(json).to.have.property("id");
-});
+// Validate response has expected fields
+const data = fetchy.response.data;
+if (data.id && data.name) {
+  console.log('✅ Response has expected shape');
+} else {
+  console.log('❌ Missing expected fields');
+}
 
-pm.test("Response time < 500ms", () => {
-  pm.expect(pm.response.responseTime).to.be.below(500);
-});
+// Check response time (via headers or custom logic)
+const contentType = fetchy.response.headers['content-type'];
+console.log('Content-Type:', contentType);
 ```
 
 ### `console.log`
@@ -78,7 +78,7 @@ pm.test("Response time < 500ms", () => {
 Use standard `console.log()` to print debug output. Results appear in the **Console** tab of the response panel.
 
 ```javascript
-console.log("Token:", pm.environment.get("api_token"));
+console.log("Token:", fetchy.environment.get("api_token"));
 ```
 
 ---
@@ -88,23 +88,23 @@ console.log("Token:", pm.environment.get("api_token"));
 ### Generate a timestamp
 
 ```javascript
-pm.environment.set("timestamp", new Date().toISOString());
+fetchy.environment.set("timestamp", new Date().toISOString());
 ```
 
-### Compute an HMAC signature
+### Generate a random UUID
 
 ```javascript
-const secret = pm.environment.get("api_secret");
-const payload = pm.request.body;
-// ... compute signature and add to header
+const uuid = crypto.randomUUID();
+fetchy.environment.set("uuid", uuid);
+console.log("UUID:", uuid);
 ```
 
 ### Chain requests — use a token from a previous response
 
 ```javascript
 // In a login request's post-script:
-const json = pm.response.json();
-pm.environment.set("access_token", json.token);
+const data = fetchy.response.data;
+fetchy.environment.set("access_token", data.token);
 ```
 
 Then in subsequent requests, add:

@@ -13,7 +13,7 @@ function HomepageHeader() {
     <header className={clsx('hero hero--primary', styles.heroBanner)}>
       <div className="container">
         <div className={styles.heroLogo} role="img" aria-label="Fetchy Logo">
-          🚀
+          <img src={require('@site/static/img/logo.jpg').default} alt="Fetchy Logo" style={{width: '120px', height: '120px', borderRadius: '24px'}} />
         </div>
         <h1 className="hero__title">{siteConfig.title}</h1>
         <p className="hero__subtitle">{siteConfig.tagline}</p>

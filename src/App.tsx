@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { HelpCircle, Settings, RefreshCw, PanelLeftClose, PanelLeftOpen, Rows, Columns, GitBranch, Download, Loader2 } from 'lucide-react';
+import { HelpCircle, Settings, RefreshCw, PanelLeftClose, PanelLeftOpen, Rows, Columns, GitBranch, Download, Loader2, BookOpen } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import TabBar from './components/TabBar';
 import RequestPanel from './components/RequestPanel';
@@ -502,6 +502,15 @@ function App() {
             className="p-2 hover:bg-fetchy-border rounded text-fetchy-text-muted hover:text-fetchy-text"
           >
             <RefreshCw size={18} />
+          </button>
+        </Tooltip>
+
+        <Tooltip content="Documentation">
+          <button
+            onClick={() => window.open('https://akineralkan94.github.io/fetchy/', '_blank')}
+            className="p-2 hover:bg-fetchy-border rounded text-fetchy-text-muted hover:text-fetchy-text"
+          >
+            <BookOpen size={18} />
           </button>
         </Tooltip>
 
