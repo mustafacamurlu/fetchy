@@ -1,0 +1,134 @@
+﻿/**
+ * Fetchy Docusaurus Theme
+ * Custom CSS overrides
+ */
+
+/* === Color Variables === */
+:root {
+  --ifm-color-primary: #3b82f6;
+  --ifm-color-primary-dark: #2563eb;
+  --ifm-color-primary-darker: #1d4ed8;
+  --ifm-color-primary-darkest: #1e40af;
+  --ifm-color-primary-light: #60a5fa;
+  --ifm-color-primary-lighter: #93c5fd;
+  --ifm-color-primary-lightest: #bfdbfe;
+
+  --ifm-code-font-size: 95%;
+  --docusaurus-highlighted-code-line-bg: rgba(59, 130, 246, 0.1);
+
+  --fetchy-gradient: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 50%, #06b6d4 100%);
+  --fetchy-hero-bg: #f0f9ff;
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #60a5fa;
+  --ifm-color-primary-dark: #3b82f6;
+  --ifm-color-primary-darker: #2563eb;
+  --ifm-color-primary-darkest: #1d4ed8;
+  --ifm-color-primary-light: #93c5fd;
+  --ifm-color-primary-lighter: #bfdbfe;
+  --ifm-color-primary-lightest: #dbeafe;
+
+  --docusaurus-highlighted-code-line-bg: rgba(96, 165, 250, 0.15);
+  --fetchy-hero-bg: #0f172a;
+}
+
+/* === Hero Section === */
+.hero--primary {
+  background: var(--fetchy-gradient) !important;
+  position: relative;
+  overflow: hidden;
+}
+
+.hero--primary::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.hero--primary .hero__title,
+.hero--primary .hero__subtitle {
+  position: relative;
+  z-index: 1;
+  color: #fff !important;
+}
+
+.hero--primary .button {
+  position: relative;
+  z-index: 1;
+}
+
+/* === Badge Styles === */
+.badge--privacy {
+  background: #064e3b;
+  color: #6ee7b7;
+  border: 1px solid #059669;
+  padding: 0.2rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin: 0 0.25rem;
+}
+
+/* === Feature Cards === */
+.feature-card {
+  border: 1px solid var(--ifm-color-emphasis-200);
+  border-radius: 12px;
+  padding: 1.5rem;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+  height: 100%;
+}
+
+.feature-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 32px rgba(59, 130, 246, 0.15);
+  border-color: var(--ifm-color-primary-light);
+}
+
+/* === Announcement Bar === */
+div[class*='announcementBar'] {
+  font-size: 0.9rem;
+}
+
+/* === Navbar === */
+.navbar__brand {
+  font-weight: 700;
+  font-size: 1.2rem;
+}
+
+/* === Code Blocks === */
+.prism-code {
+  border-radius: 10px !important;
+}
+
+/* === Shortcut Table === */
+.shortcut-table kbd {
+  background: var(--ifm-color-emphasis-200);
+  border: 1px solid var(--ifm-color-emphasis-400);
+  border-radius: 4px;
+  padding: 0.1rem 0.4rem;
+  font-size: 0.85em;
+}
+
+/* === Privacy Banner === */
+.privacy-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: rgba(6, 78, 59, 0.15);
+  border: 1px solid #059669;
+  color: #34d399;
+  border-radius: 8px;
+  padding: 0.75rem 1.25rem;
+  margin: 1rem 0;
+  font-weight: 500;
+}
+
+[data-theme='light'] .privacy-badge {
+  background: rgba(6, 78, 59, 0.08);
+  color: #065f46;
+}
