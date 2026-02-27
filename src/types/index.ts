@@ -119,6 +119,7 @@ export interface CustomThemeColors {
   successColor: string;
   warningColor: string;
   errorColor: string;
+  aiColor: string;
 }
 
 export interface CustomTheme {
@@ -140,12 +141,61 @@ export interface WorkspacesConfig {
   activeWorkspaceId: string | null;
 }
 
+// AI Provider types
+export type AIProvider = 'openai' | 'gemini' | 'claude' | 'ollama' | 'custom';
+
+export interface AISettings {
+  enabled: boolean;
+  provider: AIProvider;
+  apiKey: string;
+  model: string;
+  baseUrl: string; // Custom endpoint URL (used for custom/ollama providers)
+  temperature: number;
+  maxTokens: number;
+  persistToFile?: boolean; // Whether to persist AI secrets to the secrets file
+}
+
+export interface AISecretsStorage {
+  version: string;
+  aiSettings: Omit<AISettings, 'persistToFile'> & { persistToFile: true };
+}
+
+export interface AIMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
+export interface AIRequestPayload {
+  messages: AIMessage[];
+  temperature?: number;
+  maxTokens?: number;
+}
+
+export interface AIResponseResult {
+  success: boolean;
+  content: string;
+  error?: string;
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
+}
+
+export type AIFeatureType =
+  | 'generate-request'
+  | 'generate-script'
+  | 'explain-response'
+  | 'generate-docs'
+  | 'suggest-name';
+
 export interface AppPreferences {
   homeDirectory: string | null; // Legacy – kept for backward compat
   theme: BuiltinTheme | string; // string for custom theme IDs
   autoSave: boolean;
   maxHistoryItems: number;
   customThemes: CustomTheme[];
+  aiSettings: AISettings;
 }
 
 // OpenAPI types
@@ -324,6 +374,15 @@ export interface ElectronAPI {
     headers: Record<string, string>;
     body?: string;
   }) => Promise<ApiResponse>;
+  aiRequest: (data: {
+    provider: AIProvider;
+    apiKey: string;
+    model: string;
+    baseUrl: string;
+    messages: AIMessage[];
+    temperature?: number;
+    maxTokens?: number;
+  }) => Promise<AIResponseResult>;
   openFile: (options?: { filters?: Array<{ name: string; extensions: string[] }> }) => Promise<{ filePath: string; content: string } | null>;
   saveFile: (data: { content: string; defaultPath?: string; filters?: Array<{ name: string; extensions: string[] }> }) => Promise<string | null>;
   getDataPath: () => Promise<string>;
@@ -332,6 +391,10 @@ export interface ElectronAPI {
   // Secrets
   readSecrets: () => Promise<string | null>;
   writeSecrets: (data: { content: string }) => Promise<boolean>;
+  // AI Secrets (separate from variable secrets)
+  readAISecrets: () => Promise<string | null>;
+  writeAISecrets: (data: { content: string }) => Promise<boolean>;
+  deleteAISecrets: () => Promise<boolean>;
   // Preferences
   getPreferences: () => Promise<AppPreferences | null>;
   savePreferences: (preferences: AppPreferences) => Promise<boolean>;

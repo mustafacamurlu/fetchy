@@ -4,6 +4,7 @@ import { ApiResponse, ApiRequest } from '../types';
 import { formatBytes, formatTime, getStatusColor, prettyPrintJson, getMethodBgColor } from '../utils/helpers';
 import CodeEditor from './CodeEditor';
 import JSONViewer from './JSONViewer';
+import { AIResponseToolbar } from './AIAssistant';
 
 interface ResponsePanelProps {
   response: ApiResponse | null;
@@ -102,6 +103,13 @@ export default function ResponsePanel({ response, sentRequest, isLoading }: Resp
           </div>
         </div>
       </div>
+
+      {/* AI Response Toolbar */}
+      {sentRequest && (
+        <div className="px-3 py-1.5 border-b border-fetchy-border shrink-0">
+          <AIResponseToolbar request={sentRequest} response={response} />
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex border-b border-fetchy-border shrink-0 overflow-x-auto">

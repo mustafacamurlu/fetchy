@@ -26,6 +26,7 @@ module.exports = {
         'fetchy-success': 'var(--success, #6a9878)',
         'fetchy-warning': 'var(--warning, #a08848)',
         'fetchy-error': 'var(--error, #a06060)',
+        'fetchy-ai': 'var(--ai-color, #9070b0)',
         'fetchy-info': '#6080b0',
 
         // Light mode specific colors (fallback)

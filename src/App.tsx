@@ -49,7 +49,7 @@ function App() {
     panelLayout,
     togglePanelLayout,
   } = useAppStore();
-  const { loadPreferences } = usePreferencesStore();
+  const { loadPreferences, loadAISecrets } = usePreferencesStore();
   const { workspaces, activeWorkspaceId, isLoading: workspacesLoading, loadWorkspaces } = useWorkspacesStore();
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
   const [tabResponses, setTabResponses] = useState<Record<string, TabResponseData>>({});
@@ -60,6 +60,7 @@ function App() {
   const [showEnvironmentModal, setShowEnvironmentModal] = useState(false);
   const [showShortcutsModal, setShowShortcutsModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<'general' | 'ai'>('general');
   const [showWorkspacesModal, setShowWorkspacesModal] = useState(false);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
 
@@ -127,11 +128,21 @@ function App() {
     prevTabIdsRef.current = currentTabIds;
   }, [tabs]);
 
-  // Load preferences and workspaces on mount
+  // Load preferences, AI secrets, and workspaces on mount
   useEffect(() => {
-    loadPreferences();
+    loadPreferences().then(() => loadAISecrets());
     loadWorkspaces();
-  }, [loadPreferences, loadWorkspaces]);
+  }, [loadPreferences, loadAISecrets, loadWorkspaces]);
+
+  // Listen for custom event to open AI settings directly
+  useEffect(() => {
+    const handleOpenAISettings = () => {
+      setSettingsInitialTab('ai');
+      setShowSettingsModal(true);
+    };
+    window.addEventListener('open-ai-settings', handleOpenAISettings);
+    return () => window.removeEventListener('open-ai-settings', handleOpenAISettings);
+  }, []);
 
   const activeTab = tabs.find(t => t.id === activeTabId);
   const hasActiveRequest = activeTab?.type === 'request';
@@ -288,7 +299,7 @@ function App() {
           <WorkspaceDropdown onOpenSettings={() => setShowWorkspacesModal(true)} />
           <Tooltip content="Settings">
             <button
-              onClick={() => setShowSettingsModal(true)}
+              onClick={() => { setSettingsInitialTab('general'); setShowSettingsModal(true); }}
               className="p-2 hover:bg-fetchy-border rounded text-fetchy-text-muted hover:text-fetchy-text"
             >
               <Settings size={18} />
@@ -453,6 +464,7 @@ function App() {
           isOpen={showSettingsModal}
           onClose={() => setShowSettingsModal(false)}
           onOpenWorkspaces={() => setShowWorkspacesModal(true)}
+          initialTab={settingsInitialTab}
         />
       )}
 

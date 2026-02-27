@@ -360,34 +360,6 @@ export default function OpenApiEditor({ documentId }: OpenApiEditorProps) {
     return Array.from(paramMap.values());
   };
 
-  const convertFormat = () => {
-    try {
-      if (format === 'yaml') {
-        const parsed = jsYaml.load(content);
-        setContent(JSON.stringify(parsed, null, 2));
-        setFormat('json');
-      } else {
-        const parsed = JSON.parse(content);
-        setContent(jsYaml.dump(parsed, { indent: 2, lineWidth: -1 }));
-        setFormat('yaml');
-      }
-    } catch (e) {
-      // Keep the current format if conversion fails
-    }
-  };
-
-  const downloadSpec = () => {
-    const blob = new Blob([content], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `openapi.${format}`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
   // Group paths by tags
   const pathsByTag = useMemo(() => {
     if (!parsedSpec?.paths) return new Map<string, Array<{ path: string; method: string; operation: PathOperation; pathItem: Record<string, unknown> }>>();

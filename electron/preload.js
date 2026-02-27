@@ -12,6 +12,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   readSecrets: () => ipcRenderer.invoke('read-secrets'),
   writeSecrets: (data) => ipcRenderer.invoke('write-secrets', data),
 
+  // AI Secrets storage (separate from variable secrets)
+  readAISecrets: () => ipcRenderer.invoke('read-ai-secrets'),
+  writeAISecrets: (data) => ipcRenderer.invoke('write-ai-secrets', data),
+  deleteAISecrets: () => ipcRenderer.invoke('delete-ai-secrets'),
+
   // Preferences
   getPreferences: () => ipcRenderer.invoke('get-preferences'),
   savePreferences: (preferences) => ipcRenderer.invoke('save-preferences', preferences),
@@ -30,4 +35,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // HTTP request (bypasses CORS)
   httpRequest: (data) => ipcRenderer.invoke('http-request', data),
+
+  // AI request (provider-agnostic, routed in main process)
+  aiRequest: (data) => ipcRenderer.invoke('ai-request', data),
 });

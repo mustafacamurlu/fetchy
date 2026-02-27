@@ -1,16 +1,20 @@
 import { create } from 'zustand';
-import { AppPreferences } from '../types';
+import { AppPreferences, AISettings, AISecretsStorage } from '../types';
+import { defaultAISettings } from '../utils/aiProvider';
 
 // ElectronAPI type is declared in ../types/index.ts
 
 interface PreferencesStore {
   preferences: AppPreferences;
+  aiSettings: AISettings; // In-memory AI settings (NOT persisted in preferences.json)
   isLoading: boolean;
   isElectron: boolean;
 
   // Actions
   loadPreferences: () => Promise<void>;
   savePreferences: (updates: Partial<AppPreferences>) => Promise<boolean>;
+  loadAISecrets: () => Promise<void>;
+  updateAISettings: (updates: Partial<AISettings>) => Promise<void>;
   selectHomeDirectory: () => Promise<string | null>;
   setHomeDirectory: (directory: string, migrateData?: boolean) => Promise<boolean>;
   getHomeDirectory: () => Promise<string>;
@@ -22,10 +26,21 @@ const defaultPreferences: AppPreferences = {
   autoSave: true,
   maxHistoryItems: 100,
   customThemes: [],
+  aiSettings: defaultAISettings, // Kept for backward-compat shape; stripped before saving
 };
+
+/**
+ * Strip aiSettings from preferences before persisting so API keys / AI
+ * configuration are never written to preferences.json.
+ */
+function stripAISettings(prefs: AppPreferences): AppPreferences {
+  const { aiSettings: _ignored, ...rest } = prefs;
+  return { ...rest, aiSettings: defaultAISettings };
+}
 
 export const usePreferencesStore = create<PreferencesStore>()((set, get) => ({
   preferences: defaultPreferences,
+  aiSettings: { ...defaultAISettings },
   isLoading: true,
   isElectron: typeof window !== 'undefined' && !!window.electronAPI,
 
@@ -36,7 +51,18 @@ export const usePreferencesStore = create<PreferencesStore>()((set, get) => ({
       try {
         const prefs = await window.electronAPI.getPreferences();
         if (prefs) {
-          set({ preferences: { ...defaultPreferences, ...prefs }, isLoading: false });
+          // Migrate: if preferences.json still has real AI settings, pull them
+          // into memory but don't re-save them to preferences.json.
+          const migratedAI =
+            prefs.aiSettings && prefs.aiSettings.apiKey
+              ? { ...defaultAISettings, ...prefs.aiSettings }
+              : undefined;
+
+          set((s) => ({
+            preferences: { ...defaultPreferences, ...prefs, aiSettings: defaultAISettings },
+            aiSettings: migratedAI ?? s.aiSettings,
+            isLoading: false,
+          }));
         } else {
           set({ isLoading: false });
         }
@@ -49,7 +75,17 @@ export const usePreferencesStore = create<PreferencesStore>()((set, get) => ({
       try {
         const stored = localStorage.getItem('fetchy-preferences');
         if (stored) {
-          set({ preferences: { ...defaultPreferences, ...JSON.parse(stored) }, isLoading: false });
+          const prefs = JSON.parse(stored);
+          const migratedAI =
+            prefs.aiSettings && prefs.aiSettings.apiKey
+              ? { ...defaultAISettings, ...prefs.aiSettings }
+              : undefined;
+
+          set((s) => ({
+            preferences: { ...defaultPreferences, ...prefs, aiSettings: defaultAISettings },
+            aiSettings: migratedAI ?? s.aiSettings,
+            isLoading: false,
+          }));
         } else {
           set({ isLoading: false });
         }
@@ -60,9 +96,85 @@ export const usePreferencesStore = create<PreferencesStore>()((set, get) => ({
     }
   },
 
+  /**
+   * Load AI secrets from the separate secrets file (ai-secrets.json).
+   * Called once on app startup, after loadPreferences.
+   */
+  loadAISecrets: async () => {
+    const { isElectron } = get();
+
+    if (isElectron && window.electronAPI) {
+      try {
+        const raw = await window.electronAPI.readAISecrets();
+        if (raw) {
+          const stored: AISecretsStorage = JSON.parse(raw);
+          if (stored?.aiSettings) {
+            set({ aiSettings: { ...defaultAISettings, ...stored.aiSettings, persistToFile: true } });
+            return;
+          }
+        }
+      } catch (error) {
+        console.error('Error loading AI secrets:', error);
+      }
+    } else {
+      // Browser mode – localStorage
+      try {
+        const raw = localStorage.getItem('fetchy-ai-secrets');
+        if (raw) {
+          const stored: AISecretsStorage = JSON.parse(raw);
+          if (stored?.aiSettings) {
+            set({ aiSettings: { ...defaultAISettings, ...stored.aiSettings, persistToFile: true } });
+            return;
+          }
+        }
+      } catch (error) {
+        console.error('Error loading AI secrets from localStorage:', error);
+      }
+    }
+
+    // If secrets file doesn't exist but we have migrated settings from preferences, keep them
+    // (they are already in aiSettings from loadPreferences migration)
+  },
+
+  /**
+   * Update AI settings in memory, and optionally persist to the secrets file.
+   */
+  updateAISettings: async (updates: Partial<AISettings>) => {
+    const { isElectron, aiSettings } = get();
+    const newSettings: AISettings = { ...aiSettings, ...updates };
+    set({ aiSettings: newSettings });
+
+    // Handle persistence toggle
+    const shouldPersist = newSettings.persistToFile;
+    const wasPersisted = aiSettings.persistToFile;
+
+    if (shouldPersist) {
+      // Write to secrets file
+      const { persistToFile: _flag, ...settingsToStore } = newSettings;
+      const storage: AISecretsStorage = {
+        version: '1.0',
+        aiSettings: { ...settingsToStore, persistToFile: true },
+      };
+
+      if (isElectron && window.electronAPI) {
+        await window.electronAPI.writeAISecrets({ content: JSON.stringify(storage, null, 2) });
+      } else {
+        localStorage.setItem('fetchy-ai-secrets', JSON.stringify(storage));
+      }
+    } else if (wasPersisted && !shouldPersist) {
+      // User turned off persistence – delete the secrets file
+      if (isElectron && window.electronAPI) {
+        await window.electronAPI.deleteAISecrets();
+      } else {
+        localStorage.removeItem('fetchy-ai-secrets');
+      }
+    }
+  },
+
   savePreferences: async (updates: Partial<AppPreferences>) => {
     const { isElectron, preferences } = get();
-    const newPreferences = { ...preferences, ...updates };
+    // Always strip aiSettings before persisting
+    const newPreferences = stripAISettings({ ...preferences, ...updates });
 
     if (isElectron && window.electronAPI) {
       try {

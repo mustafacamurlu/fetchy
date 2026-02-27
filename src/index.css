@@ -48,6 +48,7 @@ body.light-theme {
   --warning: #ff9100;
   --error: #ff5252;
   --separator-color: #e1e0e0;
+  --ai-color: #7050a0;
 }
 
 body {
@@ -70,6 +71,7 @@ body {
   --warning: #a08848;
   --error: #a06060;
   --separator-color: #303045;
+  --ai-color: #9070b0;
 }
 
 /* Ocean theme - muted blue */
@@ -95,6 +97,7 @@ body.ocean-theme {
   --warning: #906828;
   --error: #8a4040;
   --separator-color: #6098b8;
+  --ai-color: #506890;
 }
 
 /* Forest theme - muted dark green */
@@ -120,6 +123,7 @@ body.forest-theme {
   --warning: #907830;
   --error: #985050;
   --separator-color: #385040;
+  --ai-color: #588868;
 }
 
 /* Earth theme - muted warm brown */
@@ -145,6 +149,7 @@ body.earth-theme {
   --warning: #906828;
   --error: #8a4040;
   --separator-color: #a07848;
+  --ai-color: #8a6848;
 }
 
 /* Aurora theme - muted nordic purples */
@@ -170,6 +175,7 @@ body.aurora-theme {
   --warning: #907840;
   --error: #906060;
   --separator-color: #282450;
+  --ai-color: #8050a0;
 }
 
 /* Sunset theme - muted flame orange */
@@ -195,6 +201,7 @@ body.sunset-theme {
   --warning: #b07828;
   --error: #a05040;
   --separator-color: #6a3818;
+  --ai-color: #b06040;
 }
 
 /* Candy theme - muted pink */
@@ -220,6 +227,7 @@ body.candy-theme {
   --warning: #906828;
   --error: #8a4040;
   --separator-color: #c060a0;
+  --ai-color: #a05080;
 }
 
 
@@ -245,6 +253,7 @@ body.pure-black-theme {
   --warning: #fcbf24;
   --error: #f97171;
   --separator-color: #272626;
+  --ai-color: #8080c0;
 }
 
 body.black-theme {
@@ -269,6 +278,7 @@ body.black-theme {
   --warning: #908030;
   --error: #a06060;
   --separator-color: #2a2a2a;
+  --ai-color: #7070b0;
 }
 
 /* Theme-aware utility classes */
@@ -417,6 +427,52 @@ body.black-theme {
   body.earth-theme .method-options,
   body.candy-theme .method-options {
     @apply bg-pink-600/20 text-pink-700;
+  }
+
+  /* AI Feature Colors — uses CSS variable so all themes (including custom) are respected */
+  .ai-text {
+    color: var(--ai-color);
+  }
+
+  .ai-bg {
+    background-color: color-mix(in srgb, var(--ai-color) 15%, transparent);
+  }
+
+  .ai-border {
+    border-color: color-mix(in srgb, var(--ai-color) 30%, transparent);
+  }
+
+  .ai-btn {
+    background-color: color-mix(in srgb, var(--ai-color) 20%, transparent);
+    color: var(--ai-color);
+    border: 1px solid color-mix(in srgb, var(--ai-color) 30%, transparent);
+  }
+
+  .ai-btn:hover {
+    background-color: color-mix(in srgb, var(--ai-color) 30%, transparent);
+    border-color: color-mix(in srgb, var(--ai-color) 50%, transparent);
+  }
+
+  .ai-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .ai-btn-solid {
+    background-color: var(--ai-color);
+    color: #ffffff;
+  }
+
+  .ai-btn-solid:hover {
+    background-color: color-mix(in srgb, var(--ai-color) 85%, black);
+  }
+
+  .ai-focus:focus {
+    border-color: var(--ai-color);
+  }
+
+  .ai-code {
+    color: color-mix(in srgb, var(--ai-color) 80%, white);
   }
 
   /* Environment Active Indicator — uses CSS variables so all themes (including custom) are respected */

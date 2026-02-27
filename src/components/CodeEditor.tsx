@@ -3,8 +3,35 @@ import { EditorView, basicSetup } from 'codemirror';
 import { EditorState, Prec } from '@codemirror/state';
 import { json } from '@codemirror/lang-json';
 import { javascript } from '@codemirror/lang-javascript';
+import { syntaxHighlighting, HighlightStyle } from '@codemirror/language';
+import { tags } from '@lezer/highlight';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { usePreferencesStore } from '../store/preferencesStore';
+
+// Light-mode syntax highlight style (VS Code Light+-inspired)
+const lightHighlightStyle = HighlightStyle.define([
+  { tag: tags.propertyName,       color: '#0550ae', fontWeight: '500' }, // JSON keys – blue
+  { tag: tags.string,              color: '#0a7a5a' },                    // string values – teal-green
+  { tag: tags.number,              color: '#c75028' },                    // numbers – orange-red
+  { tag: tags.bool,                color: '#6438bb' },                    // true/false – purple
+  { tag: tags.null,                color: '#6438bb' },                    // null – purple
+  { tag: tags.punctuation,         color: '#555555' },                    // brackets & colons
+  { tag: tags.bracket,             color: '#555555' },
+]);
+
+// Dark-mode syntax highlight style (warm, muted palette for custom dark themes)
+const darkHighlightStyle = HighlightStyle.define([
+  { tag: tags.propertyName,       color: '#9cdcfe', fontWeight: '500' }, // JSON keys – soft blue
+  { tag: tags.string,              color: '#ce9178' },                    // string values – warm peach
+  { tag: tags.number,              color: '#b5cea8' },                    // numbers – soft green
+  { tag: tags.bool,                color: '#569cd6' },                    // true/false – sky blue
+  { tag: tags.null,                color: '#569cd6' },                    // null – sky blue
+  { tag: tags.punctuation,         color: '#cccccc' },                    // brackets & colons
+  { tag: tags.bracket,             color: '#cccccc' },
+]);
+
+// Themes whose --input-bg is a light colour
+const LIGHT_THEMES = new Set(['light', 'ocean', 'earth', 'candy']);
 
 interface CodeEditorProps {
   value: string;
@@ -22,7 +49,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
   const editorRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const { preferences } = usePreferencesStore();
-  const isDark = preferences.theme !== 'light';
+  const isLight = LIGHT_THEMES.has(preferences.theme);
 
   useEffect(() => {
     if (!editorRef.current) return;
@@ -30,7 +57,9 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
     const extensions = [
       basicSetup,
       EditorView.lineWrapping,
-      ...(isDark ? [oneDark] : []),
+      // Apply the appropriate syntax highlight style for the current theme
+      syntaxHighlighting(isLight ? lightHighlightStyle : darkHighlightStyle),
+      ...(isLight ? [] : [oneDark]),
       EditorView.theme({
         '&': { height: '100%' },
         '.cm-scroller': { overflow: 'auto' },
@@ -74,7 +103,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
     return () => {
       view.destroy();
     };
-  }, [language, readOnly, isDark]);
+  }, [language, readOnly, isLight]);
 
   // Update content when value changes externally
   useEffect(() => {

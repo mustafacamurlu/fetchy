@@ -173,11 +173,11 @@ export const executeRequest = async ({
   try {
     // If in Electron, use the main process for HTTP requests to bypass CORS.
     if (checkIsElectron()) {
-      const response = await window.electronAPI.httpRequest({
+      const response = await window.electronAPI!.httpRequest({
         url,
         method: request.method,
         headers,
-        body: body,
+        body: typeof body === 'string' ? body : undefined,
       });
 
       if (request.script) {

@@ -79,6 +79,7 @@ const COLOR_VAR_MAP: Record<string, string> = {
   successColor: '--success',
   warningColor: '--warning',
   errorColor: '--error',
+  aiColor: '--ai-color',
 };
 
 const ALL_CSS_VARS = Object.values(COLOR_VAR_MAP);

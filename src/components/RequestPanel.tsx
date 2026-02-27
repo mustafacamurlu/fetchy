@@ -10,6 +10,7 @@ import VariableInput from './VariableInput';
 import VariableTextarea from './VariableTextarea';
 import Tooltip from './Tooltip';
 import CodeEditor, { CodeEditorHandle } from './CodeEditor';
+import { AIRequestToolbar, AIGenerateRequestModal } from './AIAssistant';
 
 interface RequestPanelProps {
   setResponse: (response: ApiResponse | null) => void;
@@ -44,6 +45,7 @@ export default function RequestPanel({ setResponse, setSentRequest, setIsLoading
   const [batchEditText, setBatchEditText] = useState('');
   const [codeModal, setCodeModal] = useState<{ open: boolean; activeLanguage: string; copied: boolean }>({ open: false, activeLanguage: 'curl', copied: false });
   const [showCodeDropdown, setShowCodeDropdown] = useState(false);
+  const [showAIGenerateModal, setShowAIGenerateModal] = useState(false);
 
   // Load request data when tab changes or when collections update
   // BUG FIX: Added 'collections' to dependency array to prevent stale data issue
@@ -259,6 +261,54 @@ export default function RequestPanel({ setResponse, setSentRequest, setIsLoading
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleSave, handleSend]);
 
+  // ─── AI handlers ─────────────────────────────────────────────────────────────
+  const handleAIApplyRequest = useCallback(
+    (generated: {
+      method: string;
+      url: string;
+      headers: Array<{ key: string; value: string; enabled: boolean }>;
+      params: Array<{ key: string; value: string; enabled: boolean }>;
+      body: { type: string; raw?: string };
+      name: string;
+    }) => {
+      if (!request) return;
+      handleChange({
+        method: (generated.method || request.method) as HttpMethod,
+        url: generated.url || request.url,
+        headers: generated.headers.map((h) => ({ id: uuidv4(), ...h })),
+        params: generated.params.map((p) => ({ id: uuidv4(), ...p })),
+        body: {
+          type: generated.body.type as ApiRequest['body']['type'],
+          raw: generated.body.raw || '',
+        },
+        name: generated.name || request.name,
+      });
+    },
+    [request, handleChange]
+  );
+
+  const handleAIApplyScript = useCallback(
+    (script: string, type: 'pre-request' | 'test') => {
+      if (!request) return;
+      if (type === 'pre-request') {
+        handleChange({ preScript: script });
+        setActiveSection('preScript');
+      } else {
+        handleChange({ script });
+        setActiveSection('script');
+      }
+    },
+    [request, handleChange]
+  );
+
+  const handleAIApplyName = useCallback(
+    (name: string) => {
+      if (!request) return;
+      handleChange({ name });
+    },
+    [request, handleChange]
+  );
+
   const addKeyValue = (field: 'headers' | 'params') => {
     if (!request) return;
     const newKv: KeyValue = { id: uuidv4(), key: '', value: '', enabled: true };
@@ -447,11 +497,19 @@ export default function RequestPanel({ setResponse, setSentRequest, setIsLoading
             </div>
           )}
 
-          {(request.body.type === 'json' || request.body.type === 'raw') && (
+          {request.body.type === 'json' && (
+            <CodeEditor
+              value={request.body.raw || ''}
+              onChange={(value: string) => handleChange({ body: { ...request.body, raw: value } })}
+              language="json"
+            />
+          )}
+
+          {request.body.type === 'raw' && (
             <VariableTextarea
               value={request.body.raw || ''}
               onChange={(value: string) => handleChange({ body: { ...request.body, raw: value } })}
-              placeholder={request.body.type === 'json' ? '{\n  "key": "value"\n}' : 'Enter request body...'}
+              placeholder="Enter request body..."
             />
           )}
 
@@ -934,6 +992,16 @@ export default function RequestPanel({ setResponse, setSentRequest, setIsLoading
         </Tooltip>
       </div>
 
+      {/* AI Request Toolbar */}
+      <div className="px-3 py-1.5 border-b border-fetchy-border shrink-0">
+        <AIRequestToolbar
+          request={request}
+          onOpenGenerateRequest={() => setShowAIGenerateModal(true)}
+          onApplyScript={handleAIApplyScript}
+          onApplyName={handleAIApplyName}
+        />
+      </div>
+
       {/* Section content */}
       <div className="flex-1 overflow-hidden">
         {activeSection === 'params' && renderKeyValueTable('params')}
@@ -1098,6 +1166,13 @@ export default function RequestPanel({ setResponse, setSentRequest, setIsLoading
           </div>
         </div>
       )}
+
+      {/* AI Generate Request Modal */}
+      <AIGenerateRequestModal
+        isOpen={showAIGenerateModal}
+        onClose={() => setShowAIGenerateModal(false)}
+        onApply={handleAIApplyRequest}
+      />
     </div>
   );
 }
