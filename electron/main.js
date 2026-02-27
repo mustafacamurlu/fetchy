@@ -1,4 +1,4 @@
-﻿const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+﻿const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
@@ -144,6 +144,7 @@ function createWindow() {
   });
 }
 
+Menu.setApplicationMenu(null);
 app.whenReady().then(createWindow);
 
 app.on('window-all-closed', () => {
