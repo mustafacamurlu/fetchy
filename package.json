@@ -42,6 +42,7 @@
     },
     "nsis": {
       "oneClick": true,
+      "artifactName": "${productName}.Setup.${version}.${ext}",
       "installerIcon": "build/icons/win/icon.ico",
       "uninstallerIcon": "build/icons/win/icon.ico",
       "installerHeaderIcon": "build/icons/win/icon.ico"
