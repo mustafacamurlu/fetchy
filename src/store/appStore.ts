@@ -11,7 +11,8 @@ import {
   RequestHistoryItem,
   OpenAPIDocument,
 } from '../types';
-import { AppStorageExport, createCustomStorage } from './persistence';
+import { AppStorageExport, createCustomStorage, createDebouncedStorage, invalidateWriteCache } from './persistence';
+import { migrateExport, CURRENT_SCHEMA_VERSION } from './dataMigration';
 import {
   createDefaultRequest,
   findAndUpdateRequest,
@@ -22,11 +23,28 @@ import {
   addRequestToFolder,
   addSubFolder,
 } from './requestTree';
+import {
+  type EntityIndex,
+  buildEntityIndex,
+  reindexCollection,
+  removeCollectionFromIndex,
+  indexRequest,
+  indexFolder,
+  unindexRequest,
+  unindexFolder,
+  navigateToFolder,
+  getRequestContainer,
+  getFolderContainer,
+} from './entityIndex';
 // Re-export AppStorageExport so existing consumers don't need to change their imports
 export type { AppStorageExport };
 
 
 interface AppStore {
+  // Entity index — flat O(1) lookup tables (not persisted)
+  _entityIndex: EntityIndex;
+  _rebuildIndex: () => void;
+
   // Collections
   collections: Collection[];
   addCollection: (name: string, description?: string) => Collection;
@@ -132,6 +150,16 @@ interface AppStore {
 export const useAppStore = create<AppStore>()(
   persist(
     immer((set, get) => ({
+      // ── Entity index (not persisted, rebuilt on rehydrate) ─────────────
+      _entityIndex: buildEntityIndex([]),
+
+      _rebuildIndex: () => {
+        set(state => {
+          const fresh = buildEntityIndex(state.collections as Collection[]);
+          state._entityIndex = fresh as any; // immer draft typing workaround
+        });
+      },
+
       // Collections
       collections: [],
 
@@ -147,6 +175,7 @@ export const useAppStore = create<AppStore>()(
         };
         set(state => {
           state.collections.push(collection);
+          // Index is empty for a new collection — no entities to register
         });
         return collection;
       },
@@ -171,6 +200,7 @@ export const useAppStore = create<AppStore>()(
 
       deleteCollection: (id: string) => {
         set(state => {
+          removeCollectionFromIndex(state._entityIndex as any, id);
           state.collections = state.collections.filter(c => c.id !== id);
           state.tabs = state.tabs.filter(t => t.collectionId !== id);
         });
@@ -205,14 +235,56 @@ export const useAppStore = create<AppStore>()(
         set(state => {
           const collectionIndex = state.collections.findIndex(c => c.id === collectionId);
           if (collectionIndex === -1) return;
+          const idx = state._entityIndex as any as EntityIndex;
 
           if (parentFolderId === null) {
             state.collections[collectionIndex].folders.push(newFolder);
           } else {
-            const result = addSubFolder(
-              state.collections[collectionIndex].folders,
+            // O(1) index lookup + O(depth) navigation instead of O(n) recursion
+            const parent = navigateToFolder(
+              state.collections[collectionIndex] as Collection,
+              idx,
               parentFolderId,
-              newFolder
+            );
+            if (parent) {
+              parent.folders.push(newFolder);
+            } else {
+              // Fallback to legacy recursive function
+              const result = addSubFolder(
+                state.collections[collectionIndex].folders,
+                parentFolderId,
+                newFolder
+              );
+              if (result.found) {
+                state.collections[collectionIndex].folders = result.folders;
+              }
+            }
+          }
+          // Register in index
+          indexFolder(idx, newFolder, collectionId, parentFolderId);
+        });
+      },
+
+      updateFolder: (collectionId: string, folderId: string, updates: Partial<RequestFolder>) => {
+        set(state => {
+          const collectionIndex = state.collections.findIndex(c => c.id === collectionId);
+          if (collectionIndex === -1) return;
+          const idx = state._entityIndex as any as EntityIndex;
+
+          // O(1) index lookup + O(depth) navigation
+          const folder = navigateToFolder(
+            state.collections[collectionIndex] as Collection,
+            idx,
+            folderId,
+          );
+          if (folder) {
+            Object.assign(folder, updates);
+          } else {
+            // Fallback to legacy recursive function
+            const result = findAndUpdateFolder(
+              state.collections[collectionIndex].folders,
+              folderId,
+              updates
             );
             if (result.found) {
               state.collections[collectionIndex].folders = result.folders;
@@ -221,33 +293,32 @@ export const useAppStore = create<AppStore>()(
         });
       },
 
-      updateFolder: (collectionId: string, folderId: string, updates: Partial<RequestFolder>) => {
-        set(state => {
-          const collectionIndex = state.collections.findIndex(c => c.id === collectionId);
-          if (collectionIndex === -1) return;
-
-          const result = findAndUpdateFolder(
-            state.collections[collectionIndex].folders,
-            folderId,
-            updates
-          );
-          if (result.found) {
-            state.collections[collectionIndex].folders = result.folders;
-          }
-        });
-      },
-
       deleteFolder: (collectionId: string, folderId: string) => {
         set(state => {
           const collectionIndex = state.collections.findIndex(c => c.id === collectionId);
           if (collectionIndex === -1) return;
+          const idx = state._entityIndex as any as EntityIndex;
 
-          const result = findAndDeleteFolder(
-            state.collections[collectionIndex].folders,
-            folderId
+          // Use index to find the container holding this folder
+          const container = getFolderContainer(
+            state.collections as Collection[],
+            idx,
+            folderId,
           );
-          if (result.found) {
-            state.collections[collectionIndex].folders = result.folders;
+          if (container) {
+            const folderObj = container.folders.find(f => f.id === folderId);
+            if (folderObj) unindexFolder(idx, folderObj as RequestFolder);
+            const fi = container.folders.findIndex(f => f.id === folderId);
+            if (fi !== -1) container.folders.splice(fi, 1);
+          } else {
+            // Fallback to legacy
+            const result = findAndDeleteFolder(
+              state.collections[collectionIndex].folders,
+              folderId
+            );
+            if (result.found) {
+              state.collections[collectionIndex].folders = result.folders;
+            }
           }
         });
       },
@@ -256,20 +327,31 @@ export const useAppStore = create<AppStore>()(
         set(state => {
           const collectionIndex = state.collections.findIndex(c => c.id === collectionId);
           if (collectionIndex === -1) return;
+          const idx = state._entityIndex as any as EntityIndex;
 
-          // Toggle folder expansion recursively
-          const toggleFolder = (folders: RequestFolder[]): RequestFolder[] => {
-            return folders.map(f => {
-              if (f.id === folderId) {
-                return { ...f, expanded: !f.expanded };
-              }
-              return { ...f, folders: toggleFolder(f.folders) };
-            });
-          };
-
-          state.collections[collectionIndex].folders = toggleFolder(
-            state.collections[collectionIndex].folders
+          // O(1) lookup + O(depth) navigation — no full tree copy
+          const folder = navigateToFolder(
+            state.collections[collectionIndex] as Collection,
+            idx,
+            folderId,
           );
+          if (folder) {
+            folder.expanded = !folder.expanded;
+          } else {
+            // Fallback to legacy recursive function
+            const toggleFolder = (folders: RequestFolder[]): RequestFolder[] => {
+              return folders.map(f => {
+                if (f.id === folderId) {
+                  return { ...f, expanded: !f.expanded };
+                }
+                return { ...f, folders: toggleFolder(f.folders) };
+              });
+            };
+
+            state.collections[collectionIndex].folders = toggleFolder(
+              state.collections[collectionIndex].folders
+            );
+          }
         });
       },
 
@@ -277,27 +359,39 @@ export const useAppStore = create<AppStore>()(
         set(state => {
           const collectionIndex = state.collections.findIndex(c => c.id === collectionId);
           if (collectionIndex === -1) return;
+          const idx = state._entityIndex as any as EntityIndex;
 
           if (parentFolderId === null) {
             // Reorder folders at collection root level
             const [removed] = state.collections[collectionIndex].folders.splice(fromIndex, 1);
             state.collections[collectionIndex].folders.splice(toIndex, 0, removed);
           } else {
-            // Reorder folders within a parent folder
-            const reorderInFolder = (folders: RequestFolder[]): RequestFolder[] => {
-              return folders.map(f => {
-                if (f.id === parentFolderId) {
-                  const newFolders = [...f.folders];
-                  const [removed] = newFolders.splice(fromIndex, 1);
-                  newFolders.splice(toIndex, 0, removed);
-                  return { ...f, folders: newFolders };
-                }
-                return { ...f, folders: reorderInFolder(f.folders) };
-              });
-            };
-            state.collections[collectionIndex].folders = reorderInFolder(
-              state.collections[collectionIndex].folders
+            // O(1) lookup + O(depth) navigation to parent folder
+            const parent = navigateToFolder(
+              state.collections[collectionIndex] as Collection,
+              idx,
+              parentFolderId,
             );
+            if (parent) {
+              const [removed] = parent.folders.splice(fromIndex, 1);
+              parent.folders.splice(toIndex, 0, removed);
+            } else {
+              // Fallback to legacy recursive function
+              const reorderInFolder = (folders: RequestFolder[]): RequestFolder[] => {
+                return folders.map(f => {
+                  if (f.id === parentFolderId) {
+                    const newFolders = [...f.folders];
+                    const [removed] = newFolders.splice(fromIndex, 1);
+                    newFolders.splice(toIndex, 0, removed);
+                    return { ...f, folders: newFolders };
+                  }
+                  return { ...f, folders: reorderInFolder(f.folders) };
+                });
+              };
+              state.collections[collectionIndex].folders = reorderInFolder(
+                state.collections[collectionIndex].folders
+              );
+            }
           }
         });
       },
@@ -309,36 +403,43 @@ export const useAppStore = create<AppStore>()(
         targetIndex?: number
       ) => {
         const state = get();
+        const idx = state._entityIndex as any as EntityIndex;
 
-        // Find the folder first
+        // Find the folder using the index — O(1) lookup
         const sourceCollection = state.collections.find(c => c.id === sourceCollectionId);
         if (!sourceCollection) return;
 
-        // Find and extract the folder
-        const findFolder = (folders: RequestFolder[]): RequestFolder | null => {
-          for (const folder of folders) {
-            if (folder.id === folderId) return folder;
-            const found = findFolder(folder.folders);
-            if (found) return found;
-          }
-          return null;
-        };
-
-        const folder = findFolder(sourceCollection.folders);
+        const folder = navigateToFolder(sourceCollection, idx, folderId);
         if (!folder) return;
 
+        // Deep clone for insertion into target (we're about to remove from source)
+        const folderSnapshot = JSON.parse(JSON.stringify(folder)) as RequestFolder;
+
         set(s => {
+          const sIdx = s._entityIndex as any as EntityIndex;
+
           // Remove from source collection
           const sourceColIndex = s.collections.findIndex(c => c.id === sourceCollectionId);
           if (sourceColIndex === -1) return;
 
-          const deleteResult = findAndDeleteFolder(
-            s.collections[sourceColIndex].folders,
-            folderId
+          const container = getFolderContainer(
+            s.collections as Collection[],
+            sIdx,
+            folderId,
           );
-
-          if (deleteResult.found) {
-            s.collections[sourceColIndex].folders = deleteResult.folders;
+          if (container) {
+            const folderObj = container.folders.find(f => f.id === folderId);
+            if (folderObj) unindexFolder(sIdx, folderObj as RequestFolder);
+            const fi = container.folders.findIndex(f => f.id === folderId);
+            if (fi !== -1) container.folders.splice(fi, 1);
+          } else {
+            const deleteResult = findAndDeleteFolder(
+              s.collections[sourceColIndex].folders,
+              folderId
+            );
+            if (deleteResult.found) {
+              s.collections[sourceColIndex].folders = deleteResult.folders;
+            }
           }
 
           // Add to target collection
@@ -346,10 +447,13 @@ export const useAppStore = create<AppStore>()(
           if (targetColIndex === -1) return;
 
           if (targetIndex !== undefined) {
-            s.collections[targetColIndex].folders.splice(targetIndex, 0, folder);
+            s.collections[targetColIndex].folders.splice(targetIndex, 0, folderSnapshot);
           } else {
-            s.collections[targetColIndex].folders.push(folder);
+            s.collections[targetColIndex].folders.push(folderSnapshot);
           }
+
+          // Re-index the moved folder and its children under the target collection
+          indexFolder(sIdx, folderSnapshot, targetCollectionId, null);
 
           // Update any open tabs that reference requests in this folder
           const updateTabsForFolder = (folderToCheck: RequestFolder) => {
@@ -363,7 +467,7 @@ export const useAppStore = create<AppStore>()(
             });
             folderToCheck.folders.forEach(subFolder => updateTabsForFolder(subFolder));
           };
-          updateTabsForFolder(folder);
+          updateTabsForFolder(folderSnapshot);
         });
       },
 
@@ -374,19 +478,33 @@ export const useAppStore = create<AppStore>()(
         set(state => {
           const collectionIndex = state.collections.findIndex(c => c.id === collectionId);
           if (collectionIndex === -1) return;
+          const idx = state._entityIndex as any as EntityIndex;
 
           if (folderId === null) {
             state.collections[collectionIndex].requests.push(newRequest);
           } else {
-            const result = addRequestToFolder(
-              state.collections[collectionIndex].folders,
+            // O(1) index lookup + O(depth) navigation
+            const parent = navigateToFolder(
+              state.collections[collectionIndex] as Collection,
+              idx,
               folderId,
-              newRequest
             );
-            if (result.found) {
-              state.collections[collectionIndex].folders = result.folders;
+            if (parent) {
+              parent.requests.push(newRequest);
+            } else {
+              // Fallback to legacy recursive function
+              const result = addRequestToFolder(
+                state.collections[collectionIndex].folders,
+                folderId,
+                newRequest
+              );
+              if (result.found) {
+                state.collections[collectionIndex].folders = result.folders;
+              }
             }
           }
+          // Register in index
+          indexRequest(idx, newRequest.id, collectionId, folderId);
         });
 
         return newRequest;
@@ -396,27 +514,42 @@ export const useAppStore = create<AppStore>()(
         set(state => {
           const collectionIndex = state.collections.findIndex(c => c.id === collectionId);
           if (collectionIndex === -1) return;
+          const idx = state._entityIndex as any as EntityIndex;
 
-          const result = findAndUpdateRequest(
-            state.collections[collectionIndex].folders,
-            state.collections[collectionIndex].requests,
+          // O(1) index lookup + O(depth) navigation for direct mutation
+          const container = getRequestContainer(
+            state.collections as Collection[],
+            idx,
             requestId,
-            updates
           );
-
-          if (result.found) {
-            state.collections[collectionIndex].folders = result.folders;
-            state.collections[collectionIndex].requests = result.requests;
-
-            // If the request name was updated, update any open tabs
-            if (updates.name) {
-              state.tabs = state.tabs.map(tab => {
-                if (tab.type === 'request' && tab.requestId === requestId) {
-                  return { ...tab, title: updates.name!, isModified: false };
-                }
-                return tab;
-              });
+          if (container) {
+            const reqIdx = container.requests.findIndex(r => r.id === requestId);
+            if (reqIdx !== -1) {
+              Object.assign(container.requests[reqIdx], updates);
             }
+          } else {
+            // Fallback to legacy recursive function
+            const result = findAndUpdateRequest(
+              state.collections[collectionIndex].folders,
+              state.collections[collectionIndex].requests,
+              requestId,
+              updates
+            );
+
+            if (result.found) {
+              state.collections[collectionIndex].folders = result.folders;
+              state.collections[collectionIndex].requests = result.requests;
+            }
+          }
+
+          // If the request name was updated, update any open tabs
+          if (updates.name) {
+            state.tabs = state.tabs.map(tab => {
+              if (tab.type === 'request' && tab.requestId === requestId) {
+                return { ...tab, title: updates.name!, isModified: false };
+              }
+              return tab;
+            });
           }
         });
       },
@@ -425,16 +558,29 @@ export const useAppStore = create<AppStore>()(
         set(state => {
           const collectionIndex = state.collections.findIndex(c => c.id === collectionId);
           if (collectionIndex === -1) return;
+          const idx = state._entityIndex as any as EntityIndex;
 
-          const result = findAndDeleteRequest(
-            state.collections[collectionIndex].folders,
-            state.collections[collectionIndex].requests,
-            requestId
+          // O(1) index lookup + O(depth) navigation for direct splice
+          const container = getRequestContainer(
+            state.collections as Collection[],
+            idx,
+            requestId,
           );
-
-          if (result.found) {
-            state.collections[collectionIndex].folders = result.folders;
-            state.collections[collectionIndex].requests = result.requests;
+          if (container) {
+            const reqIdx = container.requests.findIndex(r => r.id === requestId);
+            if (reqIdx !== -1) container.requests.splice(reqIdx, 1);
+            unindexRequest(idx, requestId);
+          } else {
+            // Fallback to legacy recursive function
+            const result = findAndDeleteRequest(
+              state.collections[collectionIndex].folders,
+              state.collections[collectionIndex].requests,
+              requestId
+            );
+            if (result.found) {
+              state.collections[collectionIndex].folders = result.folders;
+              state.collections[collectionIndex].requests = result.requests;
+            }
           }
 
           state.tabs = state.tabs.filter(t => t.requestId !== requestId);
@@ -443,9 +589,17 @@ export const useAppStore = create<AppStore>()(
 
       getRequest: (collectionId: string, requestId: string) => {
         const state = get();
+        const idx = state._entityIndex as any as EntityIndex;
+
+        // O(1) index lookup + O(depth) navigation
+        const container = getRequestContainer(state.collections, idx, requestId);
+        if (container) {
+          return container.requests.find(r => r.id === requestId) ?? null;
+        }
+
+        // Fallback to legacy recursive function
         const collection = state.collections.find(c => c.id === collectionId);
         if (!collection) return null;
-
         return findRequest(collection.folders, collection.requests, requestId);
       },
 
@@ -466,6 +620,8 @@ export const useAppStore = create<AppStore>()(
 
           // Add to root level of collection for simplicity
           s.collections[collectionIndex].requests.push(newRequest);
+          // Register in index (at collection root)
+          indexRequest(s._entityIndex as any as EntityIndex, newRequest.id, collectionId, null);
         });
       },
 
@@ -473,27 +629,39 @@ export const useAppStore = create<AppStore>()(
         set(state => {
           const collectionIndex = state.collections.findIndex(c => c.id === collectionId);
           if (collectionIndex === -1) return;
+          const idx = state._entityIndex as any as EntityIndex;
 
           if (folderId === null) {
             // Reorder requests at collection root level
             const [removed] = state.collections[collectionIndex].requests.splice(fromIndex, 1);
             state.collections[collectionIndex].requests.splice(toIndex, 0, removed);
           } else {
-            // Reorder requests within a folder
-            const reorderInFolder = (folders: RequestFolder[]): RequestFolder[] => {
-              return folders.map(f => {
-                if (f.id === folderId) {
-                  const newRequests = [...f.requests];
-                  const [removed] = newRequests.splice(fromIndex, 1);
-                  newRequests.splice(toIndex, 0, removed);
-                  return { ...f, requests: newRequests };
-                }
-                return { ...f, folders: reorderInFolder(f.folders) };
-              });
-            };
-            state.collections[collectionIndex].folders = reorderInFolder(
-              state.collections[collectionIndex].folders
+            // O(1) index lookup + O(depth) navigation
+            const folder = navigateToFolder(
+              state.collections[collectionIndex] as Collection,
+              idx,
+              folderId,
             );
+            if (folder) {
+              const [removed] = folder.requests.splice(fromIndex, 1);
+              folder.requests.splice(toIndex, 0, removed);
+            } else {
+              // Fallback to legacy recursive function
+              const reorderInFolder = (folders: RequestFolder[]): RequestFolder[] => {
+                return folders.map(f => {
+                  if (f.id === folderId) {
+                    const newRequests = [...f.requests];
+                    const [removed] = newRequests.splice(fromIndex, 1);
+                    newRequests.splice(toIndex, 0, removed);
+                    return { ...f, requests: newRequests };
+                  }
+                  return { ...f, folders: reorderInFolder(f.folders) };
+                });
+              };
+              state.collections[collectionIndex].folders = reorderInFolder(
+                state.collections[collectionIndex].folders
+              );
+            }
           }
         });
       },
@@ -507,28 +675,54 @@ export const useAppStore = create<AppStore>()(
         targetIndex?: number
       ) => {
         const state = get();
+        const idx = state._entityIndex as any as EntityIndex;
 
-        // Find the request first
-        const sourceCollection = state.collections.find(c => c.id === sourceCollectionId);
-        if (!sourceCollection) return;
+        // O(1) index-assisted lookup for the request
+        const container = getRequestContainer(state.collections, idx, requestId);
+        const request = container
+          ? container.requests.find(r => r.id === requestId) ?? null
+          : null;
 
-        const request = findRequest(sourceCollection.folders, sourceCollection.requests, requestId);
-        if (!request) return;
+        if (!request) {
+          // Fallback to legacy
+          const sourceCollection = state.collections.find(c => c.id === sourceCollectionId);
+          if (!sourceCollection) return;
+          const legacyReq = findRequest(sourceCollection.folders, sourceCollection.requests, requestId);
+          if (!legacyReq) return;
+        }
+
+        // We need a plain copy to insert into the target
+        const requestSnapshot = request
+          ? (JSON.parse(JSON.stringify(request)) as ApiRequest)
+          : null;
+        if (!requestSnapshot) return;
 
         set(s => {
-          // Remove from source
+          const sIdx = s._entityIndex as any as EntityIndex;
+
+          // Remove from source using index
           const sourceColIndex = s.collections.findIndex(c => c.id === sourceCollectionId);
           if (sourceColIndex === -1) return;
 
-          const deleteResult = findAndDeleteRequest(
-            s.collections[sourceColIndex].folders,
-            s.collections[sourceColIndex].requests,
-            requestId
+          const srcContainer = getRequestContainer(
+            s.collections as Collection[],
+            sIdx,
+            requestId,
           );
-
-          if (deleteResult.found) {
-            s.collections[sourceColIndex].folders = deleteResult.folders;
-            s.collections[sourceColIndex].requests = deleteResult.requests;
+          if (srcContainer) {
+            const ri = srcContainer.requests.findIndex(r => r.id === requestId);
+            if (ri !== -1) srcContainer.requests.splice(ri, 1);
+            unindexRequest(sIdx, requestId);
+          } else {
+            const deleteResult = findAndDeleteRequest(
+              s.collections[sourceColIndex].folders,
+              s.collections[sourceColIndex].requests,
+              requestId
+            );
+            if (deleteResult.found) {
+              s.collections[sourceColIndex].folders = deleteResult.folders;
+              s.collections[sourceColIndex].requests = deleteResult.requests;
+            }
           }
 
           // Add to target
@@ -538,30 +732,47 @@ export const useAppStore = create<AppStore>()(
           if (targetFolderId === null) {
             // Add to collection root
             if (targetIndex !== undefined) {
-              s.collections[targetColIndex].requests.splice(targetIndex, 0, request);
+              s.collections[targetColIndex].requests.splice(targetIndex, 0, requestSnapshot);
             } else {
-              s.collections[targetColIndex].requests.push(request);
+              s.collections[targetColIndex].requests.push(requestSnapshot);
             }
           } else {
-            // Add to folder
-            const addToFolder = (folders: RequestFolder[]): RequestFolder[] => {
-              return folders.map(f => {
-                if (f.id === targetFolderId) {
-                  const newRequests = [...f.requests];
-                  if (targetIndex !== undefined) {
-                    newRequests.splice(targetIndex, 0, request);
-                  } else {
-                    newRequests.push(request);
-                  }
-                  return { ...f, requests: newRequests };
-                }
-                return { ...f, folders: addToFolder(f.folders) };
-              });
-            };
-            s.collections[targetColIndex].folders = addToFolder(
-              s.collections[targetColIndex].folders
+            // Add to folder using index navigation
+            const targetFolder = navigateToFolder(
+              s.collections[targetColIndex] as Collection,
+              sIdx,
+              targetFolderId,
             );
+            if (targetFolder) {
+              if (targetIndex !== undefined) {
+                targetFolder.requests.splice(targetIndex, 0, requestSnapshot);
+              } else {
+                targetFolder.requests.push(requestSnapshot);
+              }
+            } else {
+              // Fallback to legacy
+              const addToFolder = (folders: RequestFolder[]): RequestFolder[] => {
+                return folders.map(f => {
+                  if (f.id === targetFolderId) {
+                    const newRequests = [...f.requests];
+                    if (targetIndex !== undefined) {
+                      newRequests.splice(targetIndex, 0, requestSnapshot);
+                    } else {
+                      newRequests.push(requestSnapshot);
+                    }
+                    return { ...f, requests: newRequests };
+                  }
+                  return { ...f, folders: addToFolder(f.folders) };
+                });
+              };
+              s.collections[targetColIndex].folders = addToFolder(
+                s.collections[targetColIndex].folders
+              );
+            }
           }
+
+          // Register in index at new location
+          indexRequest(sIdx, requestId, targetCollectionId, targetFolderId);
 
           // Update any open tabs that reference this request
           s.tabs = s.tabs.map(t => {
@@ -823,12 +1034,25 @@ export const useAppStore = create<AppStore>()(
       // Import/Export
       importCollection: (collection: Collection) => {
         set(state => {
-          // Ensure new IDs
+          // Recursively regenerate UUIDs for all nested entities (#12)
+          const regenerateIds = (folders: RequestFolder[]): RequestFolder[] =>
+            folders.map(folder => ({
+              ...folder,
+              id: uuidv4(),
+              requests: folder.requests.map(r => ({ ...r, id: uuidv4() })),
+              folders: regenerateIds(folder.folders || []),
+            }));
+
           const newCollection: Collection = {
             ...collection,
             id: uuidv4(),
+            requests: (collection.requests || []).map(r => ({ ...r, id: uuidv4() })),
+            folders: regenerateIds(collection.folders || []),
+            variables: (collection.variables || []).map(v => ({ ...v, id: uuidv4() })),
           };
           state.collections.push(newCollection);
+          // Index the newly imported collection
+          reindexCollection(state._entityIndex as any as EntityIndex, newCollection as Collection);
         });
       },
 
@@ -879,19 +1103,19 @@ export const useAppStore = create<AppStore>()(
         };
 
         // Sanitize collections (variables and auth)
+        const sanitizeFolders = (folders: any[]): any[] => {
+          return folders.map((folder: any) => ({
+            ...folder,
+            auth: sanitizeAuth(folder.auth),
+            folders: folder.folders ? sanitizeFolders(folder.folders) : [],
+          }));
+        };
+
         const sanitizedCollections = state.collections.map(collection => ({
           ...collection,
           variables: sanitizeVariables(collection.variables || []),
           auth: sanitizeAuth(collection.auth),
-          folders: collection.folders.map((folder: any) => ({
-            ...folder,
-            auth: sanitizeAuth(folder.auth),
-            // Recursively handle nested folders if needed
-            folders: folder.folders ? folder.folders.map((subFolder: any) => ({
-              ...subFolder,
-              auth: sanitizeAuth(subFolder.auth)
-            })) : []
-          }))
+          folders: sanitizeFolders(collection.folders),
         }));
 
         // Sanitize environments (variables only)
@@ -901,7 +1125,7 @@ export const useAppStore = create<AppStore>()(
         }));
 
         return {
-          version: '1.0',
+          version: CURRENT_SCHEMA_VERSION,
           exportedAt: new Date().toISOString(),
           collections: sanitizedCollections,
           environments: sanitizedEnvironments,
@@ -912,23 +1136,28 @@ export const useAppStore = create<AppStore>()(
       },
 
       importFullStorage: (data: AppStorageExport) => {
+        // Run schema migrations before applying (#28)
+        const migrated = migrateExport(data);
         set(state => {
-          if (data.collections) {
-            state.collections = data.collections;
+          if (migrated.collections) {
+            state.collections = migrated.collections;
           }
-          if (data.environments) {
-            state.environments = data.environments;
+          if (migrated.environments) {
+            state.environments = migrated.environments;
           }
-          if (data.activeEnvironmentId !== undefined) {
-            state.activeEnvironmentId = data.activeEnvironmentId;
+          if (migrated.activeEnvironmentId !== undefined) {
+            state.activeEnvironmentId = migrated.activeEnvironmentId;
           }
-          if (data.history) {
-            state.history = data.history;
+          if (migrated.history) {
+            state.history = migrated.history;
           }
           // Close all tabs when importing full storage
           state.tabs = [];
           state.activeTabId = null;
           state.activeRequest = null;
+          // Rebuild entity index from imported collections
+          const fresh = buildEntityIndex(state.collections as Collection[]);
+          state._entityIndex = fresh as any;
         });
       },
 
@@ -996,7 +1225,7 @@ export const useAppStore = create<AppStore>()(
     })),
     {
       name: 'fetchy-storage',
-      storage: createJSONStorage(() => createCustomStorage()),
+      storage: createJSONStorage(() => createDebouncedStorage(createCustomStorage())),
       partialize: (state) => ({
         collections: state.collections,
         environments: state.environments,
@@ -1008,7 +1237,41 @@ export const useAppStore = create<AppStore>()(
         panelLayout: state.panelLayout,
         openApiDocuments: state.openApiDocuments,
       }),
+      // Rebuild the entity index after every rehydrate (#26)
+      onRehydrateStorage: () => (state) => {
+        if (state) {
+          state._entityIndex = buildEntityIndex(state.collections);
+        }
+      },
     }
   )
 );
 
+/**
+ * Reset the app store to clean defaults and reload state from the
+ * (now-active) workspace's storage.  This replaces `window.location.reload()`
+ * for workspace switching — no full page reload required.
+ *
+ * Steps:
+ * 1. Invalidate the debounced-write cache so stale data isn't flushed.
+ * 2. Reset all in-memory state (tabs, active request, etc.) to defaults.
+ * 3. Call `persist.rehydrate()` which re-reads from the current storage
+ *    backend (Electron IPC → new workspace directory, or localStorage).
+ */
+export async function rehydrateWorkspace(): Promise<void> {
+  // 1. Prevent any queued debounced writes from overwriting the new workspace
+  invalidateWriteCache();
+
+  // 2. Reset transient state that isn't persisted (tabs, active request)
+  useAppStore.setState({
+    tabs: [],
+    activeTabId: null,
+    activeRequest: null,
+  });
+
+  // 3. Re-read persisted state from the now-active workspace
+  await useAppStore.persist.rehydrate();
+
+  // 4. Rebuild the entity index from the freshly loaded collections (#26)
+  useAppStore.getState()._rebuildIndex();
+}

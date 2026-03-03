@@ -117,6 +117,67 @@ export default function SettingsModal({ isOpen, onClose, onOpenWorkspaces, onOpe
               </div>
             </div>
           </div>
+
+          {/* ─── Proxy Settings (#25) ─── */}
+          <div className='border-t border-[#2d2d44]' />
+          <div className='space-y-4'>
+            <h3 className='text-sm font-medium text-white uppercase tracking-wider'>Proxy Settings</h3>
+            <div className='space-y-3'>
+              <div className='flex items-center justify-between'>
+                <div><label className='text-sm text-gray-300'>Proxy Mode</label><p className='text-xs text-gray-500'>How HTTP requests should connect to the internet</p></div>
+                <select
+                  value={preferences.proxy?.mode ?? 'system'}
+                  onChange={(e) => savePreferences({ proxy: { ...preferences.proxy || { mode: 'system', url: '' }, mode: e.target.value as 'none' | 'system' | 'manual' } })}
+                  className='px-3 py-1 bg-[#0f0f1a] border border-[#2d2d44] rounded text-white text-sm focus:outline-none focus:border-purple-500'
+                >
+                  <option value='none'>No Proxy</option>
+                  <option value='system'>System / Environment</option>
+                  <option value='manual'>Manual</option>
+                </select>
+              </div>
+              {preferences.proxy?.mode === 'manual' && (
+                <>
+                  <div>
+                    <label className='text-xs text-gray-400 mb-1 block'>Proxy URL</label>
+                    <input
+                      type='text'
+                      value={preferences.proxy?.url ?? ''}
+                      onChange={(e) => savePreferences({ proxy: { ...preferences.proxy || { mode: 'manual', url: '' }, url: e.target.value } })}
+                      placeholder='http://proxy.example.com:8080'
+                      className='w-full px-3 py-1.5 bg-[#0f0f1a] border border-[#2d2d44] rounded text-white text-sm focus:outline-none focus:border-purple-500 font-mono'
+                    />
+                  </div>
+                  <div className='grid grid-cols-2 gap-3'>
+                    <div>
+                      <label className='text-xs text-gray-400 mb-1 block'>Username (optional)</label>
+                      <input
+                        type='text'
+                        value={preferences.proxy?.username ?? ''}
+                        onChange={(e) => savePreferences({ proxy: { ...preferences.proxy || { mode: 'manual', url: '' }, username: e.target.value || undefined } })}
+                        placeholder='proxy-user'
+                        className='w-full px-3 py-1.5 bg-[#0f0f1a] border border-[#2d2d44] rounded text-white text-sm focus:outline-none focus:border-purple-500'
+                      />
+                    </div>
+                    <div>
+                      <label className='text-xs text-gray-400 mb-1 block'>Password (optional)</label>
+                      <input
+                        type='password'
+                        value={preferences.proxy?.password ?? ''}
+                        onChange={(e) => savePreferences({ proxy: { ...preferences.proxy || { mode: 'manual', url: '' }, password: e.target.value || undefined } })}
+                        placeholder='••••••••'
+                        className='w-full px-3 py-1.5 bg-[#0f0f1a] border border-[#2d2d44] rounded text-white text-sm focus:outline-none focus:border-purple-500'
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
+              {preferences.proxy?.mode === 'system' && (
+                <p className='text-xs text-gray-500'>
+                  Uses <code className='text-gray-400'>HTTP_PROXY</code> / <code className='text-gray-400'>HTTPS_PROXY</code> environment variables when set.
+                </p>
+              )}
+            </div>
+          </div>
             </>
           ) : activeTab === 'ai' ? (
             /* ─── AI Settings Tab ─── */

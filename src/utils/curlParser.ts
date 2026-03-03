@@ -25,7 +25,7 @@ export const parseCurlCommand = (curlCommand: string): ApiRequest | null => {
     const headers: KeyValue[] = [];
     let body: ApiRequest['body'] = { type: 'none' };
     let auth: ApiRequest['auth'] = { type: 'none' };
-    let rawBodyData: string[] = []; // Collect multiple -d options
+    const rawBodyData: string[] = []; // Collect multiple -d options
 
     // Helper to extract quoted strings
     const extractQuotedString = (str: string, startIndex: number): { value: string; endIndex: number } => {

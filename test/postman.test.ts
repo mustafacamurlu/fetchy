@@ -4,8 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { importPostmanCollection } from '../src/utils/postman';
-import { importPostmanEnvironment } from '../src/utils/postman';
+import { importPostmanCollection, importPostmanEnvironment } from '../src/utils/postman';
 
 const fixturesDir = join(__dirname, 'data');
 

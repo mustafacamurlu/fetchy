@@ -23,7 +23,7 @@ import Tooltip from './components/Tooltip';
 import OpenApiEditor from './components/OpenApiEditor';
 import CollectionConfigPanel from './components/CollectionConfigPanel';
 import ResolveConflictsDialog from './components/ResolveConflictsDialog';
-import { useAppStore } from './store/appStore';
+import { useAppStore, rehydrateWorkspace } from './store/appStore';
 import { invalidateWriteCache } from './store/persistence';
 import { usePreferencesStore } from './store/preferencesStore';
 import { useWorkspacesStore } from './store/workspacesStore';
@@ -386,7 +386,7 @@ function App() {
   }
 
   if (workspaces.length === 0 || !activeWorkspaceId || !activeWorkspace) {
-    return <CreateWorkspaceScreen onCreated={() => window.location.reload()} />;
+    return <CreateWorkspaceScreen onCreated={() => rehydrateWorkspace()} />;
   }
 
   return (

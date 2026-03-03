@@ -27,6 +27,7 @@ const defaultPreferences: AppPreferences = {
   maxHistoryItems: 100,
   customThemes: [],
   aiSettings: defaultAISettings, // Kept for backward-compat shape; stripped before saving
+  proxy: { mode: 'system', url: '' },
 };
 
 /**

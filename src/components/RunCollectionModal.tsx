@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { X, Play, Pause, Square, CheckCircle2, XCircle, AlertCircle, Clock, ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
 import { useAppStore } from '../store/appStore';
-import { Collection, ApiRequest, RequestFolder, ApiResponse, RequestAuth, HttpMethod } from '../types';
+import { Collection, ApiRequest, RequestFolder, ApiResponse, HttpMethod } from '../types';
 import { executeRequest } from '../utils/httpClient';
+import { resolveInheritedAuth } from '../utils/authInheritance';
 import { getMethodBgColor } from '../utils/helpers';
 
 interface RunCollectionModalProps {
@@ -58,27 +59,8 @@ const flattenRequests = (
   return result;
 };
 
-// Helper to get auth from folder or collection
-const getInheritedAuth = (
-  collection: Collection,
-  folderId?: string
-): RequestAuth | null => {
-  if (folderId) {
-    const findFolder = (folders: RequestFolder[]): RequestFolder | null => {
-      for (const folder of folders) {
-        if (folder.id === folderId) return folder;
-        const found = findFolder(folder.folders);
-        if (found) return found;
-      }
-      return null;
-    };
-    const folder = findFolder(collection.folders);
-    if (folder?.auth && folder.auth.type !== 'none') {
-      return folder.auth;
-    }
-  }
-  return collection.auth || null;
-};
+// Helper to get auth from folder or collection — walks the full ancestor chain
+const getInheritedAuth = resolveInheritedAuth;
 
 export default function RunCollectionModal({ isOpen, onClose, collectionId }: RunCollectionModalProps) {
   const { collections, getActiveEnvironment } = useAppStore();
@@ -184,6 +166,7 @@ export default function RunCollectionModal({ isOpen, onClose, collectionId }: Ru
               inheritedAuth,
               collectionPreScript: collection.preScript,
               collectionScript: collection.script,
+              signal: abortControllerRef.current?.signal,
             });
 
             const duration = Math.round(performance.now() - startTime);
@@ -234,45 +217,75 @@ export default function RunCollectionModal({ isOpen, onClose, collectionId }: Ru
         // Run all requests in parallel
         setResults(prev => prev.map(r => ({ ...r, status: 'running' })));
 
-        const promises = allRequests.map(async ({ request, folderId }, index) => {
-          const inheritedAuth = getInheritedAuth(collection, folderId);
-          const startTime = performance.now();
+        // Concurrency pool to cap parallel in-flight requests
+        const MAX_CONCURRENCY = 10;
+        let activeCount = 0;
+        const queue: (() => void)[] = [];
 
-          try {
-            const response = await executeRequest({
-              request,
-              collectionVariables,
-              environmentVariables,
-              inheritedAuth,
-              collectionPreScript: collection.preScript,
-              collectionScript: collection.script,
-            });
+        const runWithLimit = <T,>(fn: () => Promise<T>): Promise<T> => {
+          return new Promise<T>((resolve, reject) => {
+            const execute = () => {
+              activeCount++;
+              fn()
+                .then(resolve, reject)
+                .finally(() => {
+                  activeCount--;
+                  if (queue.length > 0) {
+                    queue.shift()!();
+                  }
+                });
+            };
 
-            const duration = Math.round(performance.now() - startTime);
-            const isSuccess = response.status >= 200 && response.status < 400;
+            if (activeCount < MAX_CONCURRENCY) {
+              execute();
+            } else {
+              queue.push(execute);
+            }
+          });
+        };
 
-            setResults(prev => prev.map((r, idx) =>
-              idx === index ? {
-                ...r,
-                status: isSuccess ? 'success' : 'failed',
-                response,
-                duration,
-              } : r
-            ));
+        const promises = allRequests.map(({ request, folderId }, index) => {
+          return runWithLimit(async () => {
+            const inheritedAuth = getInheritedAuth(collection, folderId);
+            const startTime = performance.now();
 
-            return { success: isSuccess, index };
-          } catch (error) {
-            const duration = Math.round(performance.now() - startTime);
-            setResults(prev => prev.map((r, idx) =>
-              idx === index ? {
-                ...r,
-                status: 'failed',
-                error: error instanceof Error ? error.message : 'Unknown error',
-                duration,
-              } : r
-            ));
-            return { success: false, index };
-          }
+            try {
+              const response = await executeRequest({
+                request,
+                collectionVariables,
+                environmentVariables,
+                inheritedAuth,
+                collectionPreScript: collection.preScript,
+                collectionScript: collection.script,
+                signal: abortControllerRef.current?.signal,
+              });
+
+              const duration = Math.round(performance.now() - startTime);
+              const isSuccess = response.status >= 200 && response.status < 400;
+
+              setResults(prev => prev.map((r, idx) =>
+                idx === index ? {
+                  ...r,
+                  status: isSuccess ? 'success' : 'failed',
+                  response,
+                  duration,
+                } : r
+              ));
+
+              return { success: isSuccess, index };
+            } catch (error) {
+              const duration = Math.round(performance.now() - startTime);
+              setResults(prev => prev.map((r, idx) =>
+                idx === index ? {
+                  ...r,
+                  status: 'failed',
+                  error: error instanceof Error ? error.message : 'Unknown error',
+                  duration,
+                } : r
+              ));
+              return { success: false, index };
+            }
+          });
         });
 
         await Promise.all(promises);

@@ -11,6 +11,16 @@ export interface DragItem {
   index: number;
 }
 
+/** State describing the currently-open right-click context menu */
+export interface ContextMenuState {
+  x: number;
+  y: number;
+  type: 'collection' | 'folder' | 'request';
+  collectionId: string;
+  folderId?: string;
+  requestId?: string;
+}
+
 /** Shared editing props passed down to each sortable item */
 export interface EditingProps {
   editingId: string | null;

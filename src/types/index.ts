@@ -49,6 +49,10 @@ export interface ApiRequest {
   script?: string;
   /** When false, TLS certificate verification is skipped for this request. Default: true */
   sslVerification?: boolean;
+  /** Runtime-only: ID of the parent container (folder or collection). Not persisted. */
+  parentId?: string;
+  /** Runtime-only: type of the parent container. Not persisted. */
+  parentType?: 'collection' | 'folder';
 }
 
 export interface ApiResponse {
@@ -58,6 +62,12 @@ export interface ApiResponse {
   body: string;
   time: number;
   size: number;
+  /** How the body string is encoded. Defaults to 'utf-8' (plain text). */
+  bodyEncoding?: 'utf-8' | 'base64';
+  /** True when the in-memory body was truncated to save RAM (#8). */
+  bodyTruncated?: boolean;
+  /** Original untruncated body size in bytes (set only when truncated). */
+  fullBodySize?: number;
   preScriptError?: string;
   preScriptOutput?: string;
   scriptError?: string;
@@ -72,6 +82,10 @@ export interface RequestFolder {
   folders: RequestFolder[];
   expanded?: boolean;
   auth?: RequestAuth;
+  /** Runtime-only: ID of the parent container (folder or collection). Not persisted. */
+  parentId?: string;
+  /** Runtime-only: type of the parent container. Not persisted. */
+  parentType?: 'collection' | 'folder';
 }
 
 export interface Collection {
@@ -195,6 +209,17 @@ export type AIFeatureType =
   | 'generate-docs'
   | 'suggest-name';
 
+export interface ProxySettings {
+  /** 'none' = no proxy, 'system' = use env vars, 'manual' = use configured URL */
+  mode: 'none' | 'system' | 'manual';
+  /** Proxy URL for manual mode (e.g. http://proxy.corp.com:8080) */
+  url: string;
+  /** Optional username for proxy authentication */
+  username?: string;
+  /** Optional password for proxy authentication */
+  password?: string;
+}
+
 export interface AppPreferences {
   homeDirectory: string | null; // Legacy – kept for backward compat
   theme: BuiltinTheme | string; // string for custom theme IDs
@@ -202,6 +227,8 @@ export interface AppPreferences {
   maxHistoryItems: number;
   customThemes: CustomTheme[];
   aiSettings: AISettings;
+  /** Proxy configuration for HTTP requests (#25) */
+  proxy?: ProxySettings;
 }
 
 // OpenAPI types
@@ -441,8 +468,12 @@ export interface ElectronAPI {
     method: string;
     headers: Record<string, string>;
     body?: string;
+    /** Serialised FormData entries for multipart requests (#24). */
+    formData?: Array<{ key: string; value: string }>;
     sslVerification?: boolean;
+    requestId?: string;
   }) => Promise<ApiResponse>;
+  abortHttpRequest: (requestId: string) => Promise<boolean>;
   aiRequest: (data: {
     provider: AIProvider;
     apiKey: string;
@@ -453,7 +484,14 @@ export interface ElectronAPI {
     maxTokens?: number;
   }) => Promise<AIResponseResult>;
   openFile: (options?: { filters?: Array<{ name: string; extensions: string[] }> }) => Promise<{ filePath: string; content: string } | null>;
-  saveFile: (data: { content: string; defaultPath?: string; filters?: Array<{ name: string; extensions: string[] }> }) => Promise<string | null>;
+  saveFile: (data: {
+    content: string | number[];
+    defaultPath?: string;
+    defaultName?: string;
+    filters?: Array<{ name: string; extensions: string[] }>;
+    /** When true, content is a number[] (serialised Uint8Array) written as raw binary (#23). */
+    binary?: boolean;
+  }) => Promise<string | null>;
   getDataPath: () => Promise<string>;
   readData: (filename: string) => Promise<string | null>;
   writeData: (data: { filename: string; content: string }) => Promise<boolean>;

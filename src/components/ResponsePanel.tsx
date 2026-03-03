@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Send, ArrowDown, Copy, Check } from 'lucide-react';
+import { useState, useMemo } from 'react';
+import { Send, ArrowDown, Copy, Check, Download, FileImage } from 'lucide-react';
 import { ApiResponse, ApiRequest } from '../types';
 import { formatBytes, formatTime, getStatusColor, prettyPrintJson, getMethodBgColor } from '../utils/helpers';
 import CodeEditor from './CodeEditor';
@@ -16,14 +16,98 @@ export default function ResponsePanel({ response, sentRequest, isLoading }: Resp
   const [activeTab, setActiveTab] = useState<'response-body' | 'response-headers' | 'request-headers' | 'request-body' | 'console'>('response-body');
   const [copied, setCopied] = useState(false);
 
+  // Binary response detection (#23)
+  const isBinary = response?.bodyEncoding === 'base64';
+  const contentType = response?.headers['content-type']?.split(';')[0]?.trim().toLowerCase() ?? '';
+  const isImage = isBinary && contentType.startsWith('image/');
+
+  // Build data URI for image preview
+  const imageDataUri = useMemo(() => {
+    if (!isImage || !response) return '';
+    return `data:${contentType};base64,${response.body}`;
+  }, [isImage, response, contentType]);
+
+  // Infer a file extension from the content-type
+  const fileExtension = useMemo(() => {
+    if (!contentType) return 'bin';
+    const sub = contentType.split('/')[1] || 'bin';
+    // Normalise common MIME subtypes
+    const EXT_MAP: Record<string, string> = {
+      'jpeg': 'jpg', 'svg+xml': 'svg', 'x-icon': 'ico',
+      'plain': 'txt', 'javascript': 'js', 'x-tar': 'tar',
+      'x-gzip': 'gz', 'x-bzip2': 'bz2', 'x-7z-compressed': '7z',
+      'x-rar-compressed': 'rar', 'vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+      'vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+    };
+    return EXT_MAP[sub] || sub;
+  }, [contentType]);
+
   const handleCopyBody = () => {
     if (!response) return;
-    const text = response.headers['content-type']?.includes('application/json')
-      ? prettyPrintJson(response.body)
-      : response.body;
-    navigator.clipboard.writeText(text);
+    if (isBinary) {
+      // For binary, copy a placeholder message — raw bytes can't be usefully pasted
+      navigator.clipboard.writeText(`[Binary response: ${formatBytes(response.size)}, ${contentType || 'unknown type'}]`);
+    } else {
+      const text = response.headers['content-type']?.includes('application/json')
+        ? prettyPrintJson(response.body)
+        : response.body;
+      navigator.clipboard.writeText(text);
+    }
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  /** Download / save the full response body (text or binary) */
+  const handleSaveFullResponse = async () => {
+    if (!response) return;
+    const defaultName = `response.${fileExtension}`;
+    const api = (window as any).electronAPI;
+
+    if (isBinary) {
+      // Decode base64 → Uint8Array for a proper binary save
+      const raw = atob(response.body);
+      const bytes = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+
+      if (api?.saveFile) {
+        // Electron: send the binary buffer for lossless saving
+        await api.saveFile({
+          content: Array.from(bytes),
+          defaultName,
+          filters: [
+            { name: 'All Files', extensions: ['*'] },
+          ],
+          binary: true,
+        });
+      } else {
+        const blob = new Blob([bytes], { type: contentType || 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = defaultName;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+    } else {
+      if (api?.saveFile) {
+        await api.saveFile({
+          content: response.body,
+          defaultName,
+          filters: [
+            { name: 'Text Files', extensions: ['txt', 'json', 'xml', 'html'] },
+            { name: 'All Files', extensions: ['*'] },
+          ],
+        });
+      } else {
+        const blob = new Blob([response.body], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = defaultName;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+    }
   };
 
   if (isLoading) {
@@ -181,7 +265,7 @@ export default function ResponsePanel({ response, sentRequest, isLoading }: Resp
       {/* Content */}
       <div className="flex-1 overflow-hidden">
         {activeTab === 'response-body' && (
-          <div className="relative h-full">
+          <div className="relative h-full flex flex-col">
             <button
               onClick={handleCopyBody}
               className="absolute top-2 right-4 z-10 p-1.5 rounded bg-fetchy-card/80 hover:bg-fetchy-border text-fetchy-text-muted hover:text-fetchy-text transition-colors"
@@ -189,7 +273,57 @@ export default function ResponsePanel({ response, sentRequest, isLoading }: Resp
             >
               {copied ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
             </button>
-            {response.headers['content-type']?.includes('application/json') ? (
+            {response.bodyTruncated && (
+              <div className="flex items-center gap-2 px-4 py-2 bg-yellow-500/10 border-b border-yellow-500/30 text-yellow-400 text-xs shrink-0">
+                <span>
+                  Response truncated for display (original size: {formatBytes(response.fullBodySize ?? 0)}).
+                </span>
+                <button
+                  onClick={handleSaveFullResponse}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-300 transition-colors"
+                >
+                  <Download size={12} />
+                  Save Full Response
+                </button>
+              </div>
+            )}
+            <div className="flex-1 overflow-hidden">
+            {isBinary ? (
+              /* Binary response display (#23) */
+              isImage ? (
+                <div className="h-full flex flex-col items-center justify-center p-4 overflow-auto">
+                  <img
+                    src={imageDataUri}
+                    alt="Response image"
+                    className="max-w-full max-h-[70vh] object-contain rounded border border-fetchy-border"
+                  />
+                  <div className="mt-3 flex items-center gap-3 text-sm text-fetchy-text-muted">
+                    <span>{contentType}</span>
+                    <span>{formatBytes(response.size)}</span>
+                    <button
+                      onClick={handleSaveFullResponse}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded bg-fetchy-accent/20 hover:bg-fetchy-accent/30 text-fetchy-accent transition-colors"
+                    >
+                      <Download size={12} />
+                      Save Image
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="h-full flex flex-col items-center justify-center text-fetchy-text-muted">
+                  <FileImage size={48} className="mb-4 opacity-50" />
+                  <p className="text-lg mb-1">Binary Response</p>
+                  <p className="text-sm mb-4">{contentType || 'Unknown type'} — {formatBytes(response.size)}</p>
+                  <button
+                    onClick={handleSaveFullResponse}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded bg-fetchy-accent/20 hover:bg-fetchy-accent/30 text-fetchy-accent transition-colors"
+                  >
+                    <Download size={14} />
+                    Save to File
+                  </button>
+                </div>
+              )
+            ) : response.headers['content-type']?.includes('application/json') ? (
               <JSONViewer data={response.body} />
             ) : (
               <CodeEditor
@@ -199,6 +333,7 @@ export default function ResponsePanel({ response, sentRequest, isLoading }: Resp
                 readOnly
               />
             )}
+            </div>
           </div>
         )}
 
