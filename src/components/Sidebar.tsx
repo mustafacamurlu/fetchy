@@ -124,7 +124,7 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
   // Filter and sort states
   const [searchQuery, setSearchQuery] = useState('');
   const [filterMethod, setFilterMethod] = useState<FilterMethod>('all');
-  const [sortOption, setSortOption] = useState<SortOption>('name-asc');
+  const [sortOption, setSortOption] = useState<SortOption>('created');
   const [showFilterMenu, setShowFilterMenu] = useState(false);
 
   // API Spec filter and sort states
