@@ -156,6 +156,15 @@ export const useAppStore = create<AppStore>()(
           const index = state.collections.findIndex(c => c.id === id);
           if (index !== -1) {
             state.collections[index] = { ...state.collections[index], ...updates };
+            // If name was updated, sync open collection tabs
+            if (updates.name) {
+              state.tabs = state.tabs.map(tab => {
+                if (tab.type === 'collection' && tab.collectionId === id) {
+                  return { ...tab, title: updates.name! };
+                }
+                return tab;
+              });
+            }
           }
         });
       },
@@ -585,6 +594,15 @@ export const useAppStore = create<AppStore>()(
           const index = state.environments.findIndex(e => e.id === id);
           if (index !== -1) {
             state.environments[index] = { ...state.environments[index], ...updates };
+            // If name was updated, sync open environment tabs
+            if (updates.name) {
+              state.tabs = state.tabs.map(tab => {
+                if (tab.type === 'environment' && tab.environmentId === id) {
+                  return { ...tab, title: updates.name! };
+                }
+                return tab;
+              });
+            }
           }
         });
       },
@@ -941,6 +959,15 @@ export const useAppStore = create<AppStore>()(
               ...updates,
               updatedAt: Date.now(),
             };
+            // If name was updated, sync open openapi tabs
+            if (updates.name) {
+              state.tabs = state.tabs.map(tab => {
+                if (tab.type === 'openapi' && tab.openApiDocId === id) {
+                  return { ...tab, title: updates.name! };
+                }
+                return tab;
+              });
+            }
           }
         });
       },
