@@ -406,6 +406,31 @@ async function migrateToSplitStorage(api: any, oldDataRaw: string) {
 }
 
 // ---------------------------------------------------------------------------
+// Pure helpers (exported for unit tests)
+// ---------------------------------------------------------------------------
+
+/**
+ * Given a Map of all loaded collections (keyed by id) and an ordered list of
+ * ids saved in meta.json, return a correctly-ordered array of collection objects.
+ *
+ * - Collections in `collectionOrder` appear first, in that order.
+ * - Collections NOT in `collectionOrder` (e.g. from an older workspace) are
+ *   appended at the end so nothing is ever lost.
+ * - IDs in `collectionOrder` that have no matching file are silently skipped.
+ *
+ * Exported for unit testing.
+ */
+export function restoreCollectionOrder(
+  collectionsMap: Map<string, any>,
+  collectionOrder: string[],
+): any[] {
+  return [
+    ...collectionOrder.filter(id => collectionsMap.has(id)).map(id => collectionsMap.get(id)),
+    ...[...collectionsMap.values()].filter(col => !collectionOrder.includes(col.id)),
+  ];
+}
+
+// ---------------------------------------------------------------------------
 // Custom storage factory (split-file for Electron, localStorage fallback)
 // ---------------------------------------------------------------------------
 
@@ -433,15 +458,24 @@ export const createCustomStorage = (): StateStorage => {
 
           // Collections
           const collectionFiles: string[] = await api.listDataDir('collections');
-          const collections: any[] = [];
+          const collectionsMap = new Map<string, any>();
           for (const file of collectionFiles) {
             const content = await api.readData(`collections/${file}`);
             if (content) {
-              try { collections.push(JSON.parse(content)); } catch {
+              try {
+                const col = JSON.parse(content);
+                collectionsMap.set(col.id, col);
+              } catch {
                 console.warn(`Skipping corrupt collection file: ${file}`);
               }
             }
           }
+          // Restore user-defined order from meta, append any unknown ones at the end
+          const collectionOrder: string[] = Array.isArray(meta.collectionOrder) ? meta.collectionOrder : [];
+          const collections: any[] = [
+            ...collectionOrder.filter(id => collectionsMap.has(id)).map(id => collectionsMap.get(id)),
+            ...[...collectionsMap.values()].filter(col => !collectionOrder.includes(col.id)),
+          ];
 
           // Environments
           const envFiles: string[] = await api.listDataDir('environments');
@@ -532,6 +566,7 @@ export const createCustomStorage = (): StateStorage => {
             sidebarCollapsed: state.sidebarCollapsed,
             requestPanelWidth: state.requestPanelWidth,
             panelLayout: state.panelLayout,
+            collectionOrder: Array.isArray(state.collections) ? state.collections.map((c: any) => c.id) : [],
           };
           await writeIfChanged(api, 'meta.json', JSON.stringify(meta, null, 2));
 
