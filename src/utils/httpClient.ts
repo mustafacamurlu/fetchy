@@ -2,6 +2,54 @@ import { ApiRequest, ApiResponse, KeyValue, RequestAuth } from '../types';
 import { replaceVariables } from './helpers';
 import { useAppStore } from '../store/appStore';
 
+// ---------------------------------------------------------------------------
+// Response body size cap (#8)
+// ---------------------------------------------------------------------------
+// Responses larger than this threshold are truncated in memory to prevent OOM.
+// The original size is preserved so the UI can offer "Save full response".
+// ---------------------------------------------------------------------------
+const MAX_RESPONSE_BODY_BYTES = 5 * 1024 * 1024; // 5 MB
+
+/**
+ * Truncate the response body if it exceeds MAX_RESPONSE_BODY_BYTES.
+ * Sets `bodyTruncated` and `fullBodySize` on the response when truncating.
+ * For base64-encoded bodies, the real decoded size is used for comparison (#23).
+ */
+function capResponseBody(response: ApiResponse): ApiResponse {
+  if (!response.body) return response;
+
+  let byteLen: number;
+  if (response.bodyEncoding === 'base64') {
+    // Approximate decoded size: base64 uses ~4/3 ratio
+    byteLen = Math.ceil(response.body.length * 3 / 4);
+  } else {
+    byteLen = new Blob([response.body]).size;
+  }
+
+  if (byteLen <= MAX_RESPONSE_BODY_BYTES) return response;
+
+  if (response.bodyEncoding === 'base64') {
+    // Truncate base64 at a valid boundary (multiples of 4 chars)
+    const targetChars = Math.floor((MAX_RESPONSE_BODY_BYTES * 4) / 3);
+    const truncated = response.body.slice(0, targetChars - (targetChars % 4));
+    return {
+      ...response,
+      body: truncated,
+      bodyTruncated: true,
+      fullBodySize: response.fullBodySize || byteLen,
+    };
+  }
+
+  // Text responses: truncate to the byte limit (approximate char-level cut for UTF-8)
+  const truncated = response.body.slice(0, MAX_RESPONSE_BODY_BYTES);
+  return {
+    ...response,
+    body: truncated + '\n\n--- Response truncated (original size: ' + (response.fullBodySize || byteLen) + ' bytes). Use "Save Full Response" to download. ---',
+    bodyTruncated: true,
+    fullBodySize: response.fullBodySize || byteLen,
+  };
+}
+
 // Check at runtime whether we're in Electron (preload may not be ready at module load time)
 function checkIsElectron(): boolean {
   return typeof window !== 'undefined' && !!(window as any).electronAPI;
@@ -16,6 +64,8 @@ interface ExecuteRequestOptions {
   inheritedAuth?: RequestAuth | null;
   collectionPreScript?: string;
   collectionScript?: string;
+  /** Optional AbortSignal to cancel the in-flight request (#15). */
+  signal?: AbortSignal;
 }
 
 export const executeRequest = async ({
@@ -25,6 +75,7 @@ export const executeRequest = async ({
   inheritedAuth = null,
   collectionPreScript,
   collectionScript,
+  signal,
 }: ExecuteRequestOptions): Promise<ApiResponse> => {
   const startTime = performance.now();
 
@@ -143,7 +194,6 @@ export const executeRequest = async ({
 
   // Run collection-level pre-script first, then request-level pre-script.
   // Collection pre-scripts run before request pre-scripts.
-  let preScriptOutput: string | undefined;
   const allPreScriptOutputs: string[] = [];
 
   if (collectionPreScript) {
@@ -181,30 +231,70 @@ export const executeRequest = async ({
       };
     }
   }
-  preScriptOutput = allPreScriptOutputs.length > 0 ? allPreScriptOutputs.join('\n') : undefined;
+  const preScriptOutput = allPreScriptOutputs.length > 0 ? allPreScriptOutputs.join('\n') : undefined;
 
   try {
     // If in Electron, use the main process for HTTP requests to bypass CORS.
     if (checkIsElectron()) {
-      const response = await window.electronAPI!.httpRequest({
-        url,
-        method: request.method,
-        headers,
-        body: typeof body === 'string' ? body : undefined,
-        sslVerification: request.sslVerification !== false, // default true
-      });
+      // Generate a unique ID so the main process can track and abort this request (#15)
+      const requestId = typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `req-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-      // Run post-scripts: request script first, then collection script
-      await runPostScripts(response, request.script, collectionScript, environmentVariables);
-      // Attach pre-script output if any
-      if (preScriptOutput) response.preScriptOutput = preScriptOutput;
-      return response;
+      // If an AbortSignal is provided, listen for abort and forward to main process
+      let abortListener: (() => void) | undefined;
+      if (signal) {
+        if (signal.aborted) {
+          return {
+            status: 0, statusText: 'Aborted', headers: {}, body: JSON.stringify({ error: 'Request aborted by user' }),
+            time: 0, size: 0,
+          };
+        }
+        abortListener = () => {
+          window.electronAPI!.abortHttpRequest(requestId).catch(() => {});
+        };
+        signal.addEventListener('abort', abortListener, { once: true });
+      }
+
+      try {
+        // Serialise form-data entries for IPC transport (#24).
+        // FormData cannot cross the IPC boundary, so we convert to a
+        // structured array that the main process can reconstruct as multipart.
+        let formDataEntries: Array<{ key: string; value: string }> | undefined;
+        if (body instanceof FormData) {
+          formDataEntries = [];
+          body.forEach((value, key) => {
+            formDataEntries!.push({ key, value: String(value) });
+          });
+        }
+
+        const response = await window.electronAPI!.httpRequest({
+          url,
+          method: request.method,
+          headers,
+          body: typeof body === 'string' ? body : undefined,
+          formData: formDataEntries,
+          sslVerification: request.sslVerification !== false, // default true
+          requestId,
+        });
+
+        // Run post-scripts: request script first, then collection script
+        await runPostScripts(response, request.script, collectionScript, environmentVariables);
+        // Attach pre-script output if any
+        if (preScriptOutput) response.preScriptOutput = preScriptOutput;
+        return capResponseBody(response);
+      } finally {
+        if (signal && abortListener) {
+          signal.removeEventListener('abort', abortListener);
+        }
+      }
     }
 
     // Browser mode: use local CORS proxy
     const proxyResponse = await fetch('/api/proxy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal, // pass the AbortSignal to fetch for browser mode (#15)
       body: JSON.stringify({
         url,
         method: request.method,
@@ -220,7 +310,7 @@ export const executeRequest = async ({
     // Attach pre-script output if any
     if (preScriptOutput) apiResponse.preScriptOutput = preScriptOutput;
 
-    return apiResponse;
+    return capResponseBody(apiResponse);
   } catch (error) {
     const endTime = performance.now();
     const responseTime = Math.round(endTime - startTime);

@@ -1,0 +1,7 @@
+dist/
+release/
+build/
+node_modules/
+docs/build/
+*.min.js
+*.min.css

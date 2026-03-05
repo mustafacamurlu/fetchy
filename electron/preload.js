@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // HTTP request (bypasses CORS)
   httpRequest: (data) => ipcRenderer.invoke('http-request', data),
+  abortHttpRequest: (requestId) => ipcRenderer.invoke('abort-http-request', requestId),
 
   // AI request (provider-agnostic, routed in main process)
   aiRequest: (data) => ipcRenderer.invoke('ai-request', data),

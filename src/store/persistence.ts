@@ -1,5 +1,43 @@
 ﻿import { StateStorage } from 'zustand/middleware';
 import { RequestHistoryItem, Collection, Environment, SecretsStorage } from '../types';
+import { migrateState } from './dataMigration';
+
+// ---------------------------------------------------------------------------
+// Debounced persistence (#7)
+// ---------------------------------------------------------------------------
+// Wraps a StateStorage so that `setItem` calls are debounced — at most one
+// write occurs per DEBOUNCE_MS window.  This prevents every keystroke from
+// serialising the entire state to disk.
+// ---------------------------------------------------------------------------
+
+const DEBOUNCE_MS = 1_500;
+
+export function createDebouncedStorage(inner: StateStorage): StateStorage {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let latestValue: string | null = null;
+  let latestName: string | null = null;
+
+  return {
+    getItem: (name: string) => inner.getItem(name),
+
+    setItem: (name: string, value: string) => {
+      latestName = name;
+      latestValue = value;
+
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (latestName !== null && latestValue !== null) {
+          inner.setItem(latestName, latestValue);
+        }
+        timer = null;
+        latestValue = null;
+        latestName = null;
+      }, DEBOUNCE_MS);
+    },
+
+    removeItem: (name: string) => inner.removeItem(name),
+  };
+}
 
 // Full storage export interface (legacy / v1 - kept for backward compatibility)
 export interface AppStorageExport {
@@ -21,6 +59,32 @@ export const isElectron =
 
 let gitSyncTimer: ReturnType<typeof setTimeout> | null = null;
 
+// ---------------------------------------------------------------------------
+// Git auto-sync callback (#31)
+// ---------------------------------------------------------------------------
+// To avoid a circular `require()` between persistence.ts and workspacesStore,
+// we use a callback pattern.  workspacesStore registers a callback at init time
+// that provides the info persistence needs to decide if/how to git-sync.
+// ---------------------------------------------------------------------------
+
+interface GitSyncInfo {
+  gitAutoSync: boolean;
+  homeDirectory: string;
+}
+
+/** Callback that returns git sync info for the active workspace, or null. */
+type GitSyncInfoProvider = () => GitSyncInfo | null;
+
+let _gitSyncInfoProvider: GitSyncInfoProvider | null = null;
+
+/**
+ * Register a callback that provides git sync info for the active workspace.
+ * Called by workspacesStore at module init time to break the circular dependency.
+ */
+export function registerGitSyncProvider(provider: GitSyncInfoProvider) {
+  _gitSyncInfoProvider = provider;
+}
+
 /**
  * Trigger a debounced git auto-commit+push if the active workspace has
  * gitAutoSync enabled.  Called after every successful write to storage.
@@ -28,40 +92,34 @@ let gitSyncTimer: ReturnType<typeof setTimeout> | null = null;
  */
 function triggerGitAutoSync() {
   if (!isElectron) return;
-  try {
-    const { useWorkspacesStore } = require('./workspacesStore');
-    const state = useWorkspacesStore.getState();
-    const active = state.workspaces.find(
-      (w: any) => w.id === state.activeWorkspaceId
-    );
-    if (!active?.gitAutoSync || !active.homeDirectory) return;
+  if (!_gitSyncInfoProvider) return;
 
-    if (gitSyncTimer) clearTimeout(gitSyncTimer);
-    gitSyncTimer = setTimeout(async () => {
-      try {
-        const api = (window as any).electronAPI;
-        if (!api?.gitAddCommitPush) return;
+  const info = _gitSyncInfoProvider();
+  if (!info?.gitAutoSync || !info.homeDirectory) return;
 
-        // Do NOT auto-sync while a merge conflict is in progress
-        if (api.gitIsMerging) {
-          const mergeState = await api.gitIsMerging({ directory: active.homeDirectory });
-          if (mergeState?.merging) {
-            console.warn('Git auto-sync skipped: merge in progress');
-            return;
-          }
+  if (gitSyncTimer) clearTimeout(gitSyncTimer);
+  gitSyncTimer = setTimeout(async () => {
+    try {
+      const api = (window as any).electronAPI;
+      if (!api?.gitAddCommitPush) return;
+
+      // Do NOT auto-sync while a merge conflict is in progress
+      if (api.gitIsMerging) {
+        const mergeState = await api.gitIsMerging({ directory: info.homeDirectory });
+        if (mergeState?.merging) {
+          console.warn('Git auto-sync skipped: merge in progress');
+          return;
         }
-
-        await api.gitAddCommitPush({
-          directory: active.homeDirectory,
-          message: `Fetchy auto-sync ${new Date().toISOString()}`,
-        });
-      } catch (e) {
-        console.error('Git auto-sync failed:', e);
       }
-    }, 3000);
-  } catch {
-    // workspacesStore not ready yet - ignore
-  }
+
+      await api.gitAddCommitPush({
+        directory: info.homeDirectory,
+        message: `Fetchy auto-sync ${new Date().toISOString()}`,
+      });
+    } catch (e) {
+      console.error('Git auto-sync failed:', e);
+    }
+  }, 3000);
 }
 
 // ---------------------------------------------------------------------------
@@ -138,7 +196,7 @@ function stripTransientEnvValues(stateWrapper: any): any {
         .map((v: any) => {
           const { _fromScript, _scriptOverride, ...rest } = v;
           if (_scriptOverride) {
-            const { currentValue, ...clean } = rest;
+            const { currentValue: _cv, ...clean } = rest;
             return clean;
           }
           return rest;
@@ -216,6 +274,74 @@ export function invalidateWriteCache() {
   for (const key of Object.keys(writeContentCache)) {
     delete writeContentCache[key];
   }
+}
+
+// ---------------------------------------------------------------------------
+// Shared prepare / hydrate pipeline (#27)
+// ---------------------------------------------------------------------------
+// Both the Electron split-file adapter and the browser localStorage adapter
+// perform the same sequence of pre-write and post-read transformations:
+//   Write: truncateHistoryBodies → stripTransient → extractSecrets
+//   Read:  mergeSecrets → stripTransient
+// Rather than duplicating this in every adapter, we expose two composable
+// pipeline functions that every adapter calls before doing I/O.
+// ---------------------------------------------------------------------------
+
+const MAX_HISTORY_BODY_SIZE = 5_000;
+
+/**
+ * Prepare a state wrapper for persistence.
+ *
+ * Steps (applied in order):
+ *   1. Trim large response bodies in history.
+ *   2. Strip transient (script-set) env variable values.
+ *   3. Extract secret values into a separate map.
+ *
+ * Returns the cleaned state wrapper and the extracted secrets map.
+ */
+export function prepareForWrite(stateWrapper: any): {
+  cleanState: any;
+  secretsMap: Record<string, string>;
+} {
+  // 1. Trim large history bodies
+  if (stateWrapper?.state?.history) {
+    stateWrapper.state.history = stateWrapper.state.history.map(
+      (item: any) => {
+        if (item?.response?.body && item.response.body.length > MAX_HISTORY_BODY_SIZE) {
+          return {
+            ...item,
+            response: {
+              ...item.response,
+              body: item.response.body.slice(0, MAX_HISTORY_BODY_SIZE) + '\n... [truncated for storage]',
+            },
+          };
+        }
+        return item;
+      }
+    );
+  }
+
+  // 2. Strip transient env values
+  stripTransientEnvValues(stateWrapper);
+
+  // 3. Extract secrets
+  return extractSecrets(stateWrapper);
+}
+
+/**
+ * Hydrate a state wrapper loaded from storage.
+ *
+ * Steps (applied in order):
+ *   1. Merge secret values back into the state.
+ *   2. Strip transient (script-set) env variable values.
+ *
+ * Returns the hydrated state wrapper.
+ */
+export function hydrateAfterRead(stateWrapper: any, secretsMap: Record<string, string>): any {
+  // 1. Merge secrets
+  const merged = mergeSecrets(stateWrapper, secretsMap);
+  // 2. Strip transient env values
+  return stripTransientEnvValues(merged);
 }
 
 // ---------------------------------------------------------------------------
@@ -363,20 +489,26 @@ export const createCustomStorage = (): StateStorage => {
 
           let stateWrapper = { state, version: 0 };
 
-          // Merge secrets from secrets directory
+          // Hydrate: merge secrets + strip transient values (#27 shared pipeline)
           try {
             const secretsRaw = await api.readSecrets();
             if (secretsRaw) {
               const secretsStorage: SecretsStorage = JSON.parse(secretsRaw);
               if (secretsStorage?.secrets) {
-                stateWrapper = mergeSecrets(stateWrapper, secretsStorage.secrets);
+                stateWrapper = hydrateAfterRead(stateWrapper, secretsStorage.secrets);
+              } else {
+                stateWrapper = stripTransientEnvValues(stateWrapper);
               }
+            } else {
+              stateWrapper = stripTransientEnvValues(stateWrapper);
             }
           } catch {
-            // secrets file missing or corrupt - not fatal
+            stateWrapper = stripTransientEnvValues(stateWrapper);
           }
 
-          stateWrapper = stripTransientEnvValues(stateWrapper);
+          // Run schema migrations (#28)
+          stateWrapper = migrateState(stateWrapper);
+
           return JSON.stringify(stateWrapper);
         } catch (error) {
           console.error('Error reading from split file storage:', error);
@@ -389,27 +521,8 @@ export const createCustomStorage = (): StateStorage => {
           const api = (window as any).electronAPI;
           const stateWrapper = JSON.parse(value);
 
-          // Trim large response bodies from history
-          if (stateWrapper?.state?.history) {
-            const MAX_BODY_SIZE = 5_000;
-            stateWrapper.state.history = stateWrapper.state.history.map(
-              (item: any) => {
-                if (item?.response?.body && item.response.body.length > MAX_BODY_SIZE) {
-                  return {
-                    ...item,
-                    response: {
-                      ...item.response,
-                      body: item.response.body.slice(0, MAX_BODY_SIZE) + '\n... [truncated for storage]',
-                    },
-                  };
-                }
-                return item;
-              }
-            );
-          }
-
-          stripTransientEnvValues(stateWrapper);
-          const { cleanState, secretsMap } = extractSecrets(stateWrapper);
+          // Shared write pipeline: truncate history, strip transient, extract secrets (#27)
+          const { cleanState, secretsMap } = prepareForWrite(stateWrapper);
           const state = cleanState.state;
 
           // Write meta.json
@@ -528,14 +641,23 @@ export const createCustomStorage = (): StateStorage => {
 
       try {
         let stateWrapper = JSON.parse(raw);
+
+        // Hydrate: merge secrets + strip transient values (#27 shared pipeline)
         const secretsRaw = localStorage.getItem(`${name}-secrets`);
         if (secretsRaw) {
           const secretsStorage: SecretsStorage = JSON.parse(secretsRaw);
           if (secretsStorage?.secrets) {
-            stateWrapper = mergeSecrets(stateWrapper, secretsStorage.secrets);
+            stateWrapper = hydrateAfterRead(stateWrapper, secretsStorage.secrets);
+          } else {
+            stateWrapper = stripTransientEnvValues(stateWrapper);
           }
+        } else {
+          stateWrapper = stripTransientEnvValues(stateWrapper);
         }
-        stateWrapper = stripTransientEnvValues(stateWrapper);
+
+        // Run schema migrations (#28)
+        stateWrapper = migrateState(stateWrapper);
+
         return JSON.stringify(stateWrapper);
       } catch {
         return raw;
@@ -546,26 +668,8 @@ export const createCustomStorage = (): StateStorage => {
       try {
         const stateWrapper = JSON.parse(value);
 
-        if (stateWrapper?.state?.history) {
-          const MAX_BODY_SIZE = 5_000;
-          stateWrapper.state.history = stateWrapper.state.history.map(
-            (item: any) => {
-              if (item?.response?.body && item.response.body.length > MAX_BODY_SIZE) {
-                return {
-                  ...item,
-                  response: {
-                    ...item.response,
-                    body: item.response.body.slice(0, MAX_BODY_SIZE) + '\n... [truncated for storage]',
-                  },
-                };
-              }
-              return item;
-            }
-          );
-        }
-
-        stripTransientEnvValues(stateWrapper);
-        const { cleanState, secretsMap } = extractSecrets(stateWrapper);
+        // Shared write pipeline: truncate history, strip transient, extract secrets (#27)
+        const { cleanState, secretsMap } = prepareForWrite(stateWrapper);
         localStorage.setItem(name, JSON.stringify(cleanState));
         const secretsStorage: SecretsStorage = { version: '1.0', secrets: secretsMap };
         localStorage.setItem(`${name}-secrets`, JSON.stringify(secretsStorage));

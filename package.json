@@ -9,6 +9,11 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
+    "lint": "eslint src/ test/ --ext .ts,.tsx",
+    "lint:fix": "eslint src/ test/ --ext .ts,.tsx --fix",
+    "lint:strict": "eslint src/ test/ --ext .ts,.tsx --max-warnings 0",
+    "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"test/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"test/**/*.ts\"",
     "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "electron:build": "node scripts/generate-icons.js && vite build && electron-builder",
     "electron:preview": "vite build && electron ."
@@ -23,6 +28,10 @@
   ],
   "author": "",
   "license": "MIT",
+  "engines": {
+    "node": ">=16.15.0",
+    "npm": ">=8.0.0"
+  },
   "build": {
     "appId": "com.fetchy.app",
     "productName": "Fetchy",
@@ -72,7 +81,7 @@
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
-    "@vitejs/plugin-react": "^4.2.1",
+    "@vitejs/plugin-react": "^4.7.0",
     "autoprefixer": "^10.4.19",
     "codemirror": "^6.0.1",
     "electron-updater": "^6.8.3",
@@ -84,7 +93,7 @@
     "react-dom": "^18.2.0",
     "tailwindcss": "^3.4.1",
     "uuid": "^9.0.1",
-    "vite": "^4.5.3",
+    "vite": "^4.5.14",
     "zustand": "^4.5.2"
   },
   "devDependencies": {
@@ -92,7 +101,7 @@
     "@types/react": "^18.2.73",
     "@types/react-dom": "^18.2.23",
     "concurrently": "^8.2.2",
-    "electron": "^40.0.0",
+    "electron": "^40.6.1",
     "electron-builder": "^26.4.0",
     "electron-icon-maker": "^0.0.5",
     "jimp": "^1.6.0",
@@ -101,6 +110,13 @@
     "sharp": "^0.34.5",
     "typescript": "^5.4.3",
     "vitest": "^0.34.6",
-    "wait-on": "^7.2.0"
+    "wait-on": "^7.2.0",
+    "eslint": "^8.57.0",
+    "@typescript-eslint/eslint-plugin": "^6.21.0",
+    "@typescript-eslint/parser": "^6.21.0",
+    "eslint-plugin-react": "^7.34.0",
+    "eslint-plugin-react-hooks": "^4.6.0",
+    "prettier": "^3.2.0",
+    "eslint-config-prettier": "^9.1.0"
   }
 }
