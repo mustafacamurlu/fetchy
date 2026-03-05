@@ -387,11 +387,18 @@ const runPostScripts = async (
   }
 };
 
-const WORKER_SOURCE = `
-'use strict';
+/**
+ * Build an isolated Web Worker blob that embeds the user script directly as
+ * source code. This avoids `new Function()` / eval(), which would require
+ * `'unsafe-eval'` in the Content-Security-Policy. Because the script is part
+ * of the blob's own JS source (allowed by `script-src blob:`), no extra CSP
+ * directives are needed.
+ *
+ * Exported for unit testing.
+ */
+export const buildWorkerSource = (userScript: string) => `'use strict';
 self.onmessage = function (e) {
   var data = e.data;
-  var script = data.script;
   var fetchyData = data.fetchyData;
   var scriptType = data.scriptType;
 
@@ -441,8 +448,9 @@ self.onmessage = function (e) {
   };
 
   try {
-    var fn = new Function('fetchy', 'console', script);
-    fn(fetchy, _console);
+    (function(fetchy, console) {
+${userScript}
+    })(fetchy, _console);
     self.postMessage({ type: 'done', logs: logs, envUpdates: envUpdates });
   } catch (err) {
     self.postMessage({ type: 'error', message: err.message, logs: logs, envUpdates: envUpdates });
@@ -471,7 +479,7 @@ const runScriptInWorker = (
   response?: ApiResponse,
 ): Promise<ScriptResult> => {
   return new Promise((resolve) => {
-    const blob = new Blob([WORKER_SOURCE], { type: 'application/javascript' });
+    const blob = new Blob([buildWorkerSource(script)], { type: 'application/javascript' });
     const url = URL.createObjectURL(blob);
     const worker = new Worker(url);
 
@@ -526,7 +534,7 @@ const runScriptInWorker = (
       }
     }
 
-    worker.postMessage({ script, fetchyData, scriptType });
+    worker.postMessage({ fetchyData, scriptType });
   });
 };
 

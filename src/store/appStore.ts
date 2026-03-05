@@ -1,6 +1,10 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
+import { enableMapSet } from 'immer';
+
+// Required for immer v10 to support Map/Set in draft state (used by _entityIndex)
+enableMapSet();
 import { v4 as uuidv4 } from 'uuid';
 import {
   Collection,
