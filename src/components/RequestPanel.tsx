@@ -1,17 +1,20 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Send, Save, Plus, Trash2, FileText, X, Link, Terminal, Check, Code, ChevronDown } from 'lucide-react';
+import { Save, Plus, Trash2, FileText, X, Terminal, Check } from 'lucide-react';
 import { useAppStore } from '../store/appStore';
 import { ApiRequest, ApiResponse, HttpMethod, KeyValue } from '../types';
 import { executeRequest } from '../utils/httpClient';
 import { resolveRequestVariables, generateCurl, generateJavaScript, generatePython, generateJava, generateDotNet, generateGo, generateRust, generateCpp } from '../utils/helpers';
+import { resolveInheritedAuth } from '../utils/authInheritance';
 import { v4 as uuidv4 } from 'uuid';
 import { parseCurlCommand } from '../utils/curlParser';
 import VariableInput from './VariableInput';
-import VariableTextarea from './VariableTextarea';
 import Tooltip from './Tooltip';
-import CodeEditor, { CodeEditorHandle } from './CodeEditor';
 import { AIRequestToolbar, AIGenerateRequestModal } from './AIAssistant';
+import BodyEditor from './request/BodyEditor';
+import AuthEditor from './request/AuthEditor';
+import ScriptsEditor from './request/ScriptsEditor';
+import UrlBar from './request/UrlBar';
 
 interface RequestPanelProps {
   setResponse: (response: ApiResponse | null) => void;
@@ -20,8 +23,6 @@ interface RequestPanelProps {
   isLoading: boolean;
   urlBarContainer?: HTMLDivElement | null;
 }
-
-const HTTP_METHODS: HttpMethod[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
 
 export default function RequestPanel({ setResponse, setSentRequest, setIsLoading, isLoading, urlBarContainer }: RequestPanelProps) {
   const {
@@ -41,13 +42,11 @@ export default function RequestPanel({ setResponse, setSentRequest, setIsLoading
   const [request, setLocalRequest] = useState<ApiRequest | null>(null);
   const [activeSection, setActiveSection] = useState<'params' | 'headers' | 'body' | 'auth' | 'preScript' | 'script'>('params');
   const [batchEditModal, setBatchEditModal] = useState<{ open: boolean; field: 'headers' | 'params' | null }>({ open: false, field: null });
-  const preScriptEditorRef = useRef<CodeEditorHandle>(null);
-  const postScriptEditorRef = useRef<CodeEditorHandle>(null);
   const [batchEditText, setBatchEditText] = useState('');
   const [codeModal, setCodeModal] = useState<{ open: boolean; activeLanguage: string; copied: boolean }>({ open: false, activeLanguage: 'curl', copied: false });
-  const [showCodeDropdown, setShowCodeDropdown] = useState(false);
   const [showAIGenerateModal, setShowAIGenerateModal] = useState(false);
   const [curlImportFlash, setCurlImportFlash] = useState(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // Load request data when tab changes or when collections update
   // BUG FIX: Added 'collections' to dependency array to prevent stale data issue
@@ -198,40 +197,20 @@ export default function RequestPanel({ setResponse, setSentRequest, setIsLoading
     }
   }, [request, handleChange]);
 
-  // Get inherited auth from collection or folder
+  // Get inherited auth by walking the full ancestor chain (folder → parent → … → collection)
   const getInheritedAuth = useCallback(() => {
     if (!activeTab?.collectionId) return null;
     const collection = collections.find(c => c.id === activeTab.collectionId);
     if (!collection) return null;
-
-    // If request is in a folder, check folder auth first
-    if (activeTab.folderId) {
-      const findFolderAuth = (folders: typeof collection.folders, folderId: string): typeof collection.auth | null => {
-        for (const folder of folders) {
-          if (folder.id === folderId) {
-            if (folder.auth && folder.auth.type !== 'none' && folder.auth.type !== 'inherit') {
-              return folder.auth;
-            }
-            return null;
-          }
-          const result = findFolderAuth(folder.folders, folderId);
-          if (result !== null) return result;
-        }
-        return null;
-      };
-      const folderAuth = findFolderAuth(collection.folders, activeTab.folderId);
-      if (folderAuth) return folderAuth;
-    }
-
-    // Fall back to collection auth
-    if (collection.auth && collection.auth.type !== 'none' && collection.auth.type !== 'inherit') {
-      return collection.auth;
-    }
-    return null;
+    return resolveInheritedAuth(collection, activeTab.folderId);
   }, [activeTab?.collectionId, activeTab?.folderId, collections]);
 
   const handleSend = useCallback(async () => {
     if (!request || isLoading) return;
+
+    // Create a fresh AbortController for this request
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
     setIsLoading(true);
     setResponse(null);
@@ -255,12 +234,17 @@ export default function RequestPanel({ setResponse, setSentRequest, setIsLoading
         collectionVariables: collection?.variables || [],
         environmentVariables: environment?.variables || [],
         inheritedAuth,
+        collectionPreScript: collection?.preScript,
+        collectionScript: collection?.script,
+        signal: controller.signal,
       });
 
       setResponse(response);
       // Save to history with resolved variables so actual values are shown
       addToHistory({ request: resolvedRequest, response });
     } catch (error) {
+      // Don't show error UI if the request was intentionally aborted
+      if (controller.signal.aborted) return;
       console.error('Request failed:', error);
       setResponse({
         status: 0,
@@ -271,9 +255,16 @@ export default function RequestPanel({ setResponse, setSentRequest, setIsLoading
         size: 0,
       });
     } finally {
+      abortControllerRef.current = null;
       setIsLoading(false);
     }
   }, [request, isLoading, setIsLoading, setResponse, setSentRequest, collections, activeTab, getActiveEnvironment, getInheritedAuth, addToHistory]);
+
+  const handleCancel = useCallback(() => {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    setIsLoading(false);
+  }, [setIsLoading]);
 
   // Keyboard shortcuts for save (Ctrl+S) and send (Ctrl+Enter)
   useEffect(() => {
@@ -286,11 +277,15 @@ export default function RequestPanel({ setResponse, setSentRequest, setIsLoading
         e.preventDefault();
         handleSend();
       }
+      if (e.key === 'Escape' && isLoading) {
+        e.preventDefault();
+        handleCancel();
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleSave, handleSend]);
+  }, [handleSave, handleSend, handleCancel, isLoading]);
 
   // ─── AI handlers ─────────────────────────────────────────────────────────────
   const handleAIApplyRequest = useCallback(
@@ -494,493 +489,19 @@ export default function RequestPanel({ setResponse, setSentRequest, setIsLoading
     );
   };
 
-  const renderBody = () => {
-    const bodyTypes = [
-      { value: 'none', label: 'None' },
-      { value: 'json', label: 'JSON' },
-      { value: 'raw', label: 'Raw' },
-      { value: 'x-www-form-urlencoded', label: 'URL Encoded' },
-      { value: 'form-data', label: 'Form Data' },
-    ];
-
-    return (
-      <div className="h-full flex flex-col">
-        <div className="flex items-center gap-2 p-2 border-b border-fetchy-border">
-          {bodyTypes.map((type) => (
-            <button
-              key={type.value}
-              onClick={() => handleChange({ body: { ...request.body, type: type.value as any } })}
-              className={`px-3 py-1 text-sm rounded ${
-                request.body.type === type.value
-                  ? 'bg-fetchy-accent text-white'
-                  : 'text-fetchy-text-muted hover:text-fetchy-text hover:bg-fetchy-border'
-              }`}
-            >
-              {type.label}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex-1 overflow-hidden">
-          {request.body.type === 'none' && (
-            <div className="h-full flex items-center justify-center text-fetchy-text-muted">
-              <p>This request does not have a body</p>
-            </div>
-          )}
-
-          {request.body.type === 'json' && (
-            <CodeEditor
-              value={request.body.raw || ''}
-              onChange={(value: string) => handleChange({ body: { ...request.body, raw: value } })}
-              language="json"
-            />
-          )}
-
-          {request.body.type === 'raw' && (
-            <VariableTextarea
-              value={request.body.raw || ''}
-              onChange={(value: string) => handleChange({ body: { ...request.body, raw: value } })}
-              placeholder="Enter request body..."
-            />
-          )}
-
-          {request.body.type === 'x-www-form-urlencoded' && (
-            <div className="p-2">
-              <table className="w-full kv-table">
-                <thead>
-                  <tr className="text-left text-xs text-fetchy-text-muted border-b border-fetchy-border">
-                    <th className="w-8 p-2"></th>
-                    <th className="p-2">Key</th>
-                    <th className="p-2">Value</th>
-                    <th className="w-8 p-2"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(request.body.urlencoded || []).map((item) => (
-                    <tr key={item.id} className="border-b border-fetchy-border/50">
-                      <td className="p-2">
-                        <input
-                          type="checkbox"
-                          checked={item.enabled}
-                          onChange={(e) => {
-                            const updated = (request.body.urlencoded || []).map(u =>
-                              u.id === item.id ? { ...u, enabled: e.target.checked } : u
-                            );
-                            handleChange({ body: { ...request.body, urlencoded: updated } });
-                          }}
-                          className="w-4 h-4 accent-fetchy-accent"
-                        />
-                      </td>
-                      <td className="p-0">
-                        <input
-                          type="text"
-                          value={item.key}
-                          onChange={(e) => {
-                            const updated = (request.body.urlencoded || []).map(u =>
-                              u.id === item.id ? { ...u, key: e.target.value } : u
-                            );
-                            handleChange({ body: { ...request.body, urlencoded: updated } });
-                          }}
-                          placeholder="Key"
-                          className="w-full bg-transparent p-2 text-sm outline-none focus:bg-fetchy-card"
-                        />
-                      </td>
-                      <td className="p-0">
-                        <VariableInput
-                          value={item.value}
-                          onChange={(value) => {
-                            const updated = (request.body.urlencoded || []).map(u =>
-                              u.id === item.id ? { ...u, value: value } : u
-                            );
-                            handleChange({ body: { ...request.body, urlencoded: updated } });
-                          }}
-                          placeholder="Value"
-                          className="w-full bg-transparent p-2 text-sm outline-none focus:bg-fetchy-card"
-                        />
-                      </td>
-                      <td className="p-2">
-                        <button
-                          onClick={() => {
-                            const updated = (request.body.urlencoded || []).filter(u => u.id !== item.id);
-                            handleChange({ body: { ...request.body, urlencoded: updated } });
-                          }}
-                          className="p-1 hover:bg-fetchy-border rounded text-fetchy-text-muted hover:text-red-400"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <button
-                onClick={() => {
-                  const newItem: KeyValue = { id: uuidv4(), key: '', value: '', enabled: true };
-                  handleChange({ body: { ...request.body, urlencoded: [...(request.body.urlencoded || []), newItem] } });
-                }}
-                className="flex items-center gap-1 px-3 py-2 text-sm text-fetchy-text-muted hover:text-fetchy-text"
-              >
-                <Plus size={14} /> Add Field
-              </button>
-            </div>
-          )}
-
-          {request.body.type === 'form-data' && (
-            <div className="p-2">
-              <table className="w-full kv-table">
-                <thead>
-                  <tr className="text-left text-xs text-fetchy-text-muted border-b border-fetchy-border">
-                    <th className="w-8 p-2"></th>
-                    <th className="p-2">Key</th>
-                    <th className="p-2">Value</th>
-                    <th className="w-8 p-2"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(request.body.formData || []).map((item) => (
-                    <tr key={item.id} className="border-b border-fetchy-border/50">
-                      <td className="p-2">
-                        <input
-                          type="checkbox"
-                          checked={item.enabled}
-                          onChange={(e) => {
-                            const updated = (request.body.formData || []).map(f =>
-                              f.id === item.id ? { ...f, enabled: e.target.checked } : f
-                            );
-                            handleChange({ body: { ...request.body, formData: updated } });
-                          }}
-                          className="w-4 h-4 accent-fetchy-accent"
-                        />
-                      </td>
-                      <td className="p-0">
-                        <input
-                          type="text"
-                          value={item.key}
-                          onChange={(e) => {
-                            const updated = (request.body.formData || []).map(f =>
-                              f.id === item.id ? { ...f, key: e.target.value } : f
-                            );
-                            handleChange({ body: { ...request.body, formData: updated } });
-                          }}
-                          placeholder="Key"
-                          className="w-full bg-transparent p-2 text-sm outline-none focus:bg-fetchy-card"
-                        />
-                      </td>
-                      <td className="p-0">
-                        <VariableInput
-                          value={item.value}
-                          onChange={(value) => {
-                            const updated = (request.body.formData || []).map(f =>
-                              f.id === item.id ? { ...f, value: value } : f
-                            );
-                            handleChange({ body: { ...request.body, formData: updated } });
-                          }}
-                          placeholder="Value"
-                          className="w-full bg-transparent p-2 text-sm outline-none focus:bg-fetchy-card"
-                        />
-                      </td>
-                      <td className="p-2">
-                        <button
-                          onClick={() => {
-                            const updated = (request.body.formData || []).filter(f => f.id !== item.id);
-                            handleChange({ body: { ...request.body, formData: updated } });
-                          }}
-                          className="p-1 hover:bg-fetchy-border rounded text-fetchy-text-muted hover:text-red-400"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <button
-                onClick={() => {
-                  const newItem: KeyValue = { id: uuidv4(), key: '', value: '', enabled: true };
-                  handleChange({ body: { ...request.body, formData: [...(request.body.formData || []), newItem] } });
-                }}
-                className="flex items-center gap-1 px-3 py-2 text-sm text-fetchy-text-muted hover:text-fetchy-text"
-              >
-                <Plus size={14} /> Add Field
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  };
-
-  const renderAuth = () => {
-    const authTypes = [
-      { value: 'inherit', label: 'Inherit' },
-      { value: 'none', label: 'No Auth' },
-      { value: 'basic', label: 'Basic Auth' },
-      { value: 'bearer', label: 'Bearer Token' },
-      { value: 'api-key', label: 'API Key' },
-    ];
-
-    const inheritedAuth = getInheritedAuth();
-    const getAuthTypeLabel = (type: string) => {
-      const found = authTypes.find(t => t.value === type);
-      return found ? found.label : type;
-    };
-
-    return (
-      <div className="h-full flex flex-col">
-        <div className="flex items-center gap-2 p-2 border-b border-fetchy-border">
-          {authTypes.map((type) => (
-            <button
-              key={type.value}
-              onClick={() => handleChange({ auth: { ...request.auth, type: type.value as any } })}
-              className={`px-3 py-1 text-sm rounded ${
-                request.auth.type === type.value
-                  ? 'bg-fetchy-accent text-white'
-                  : 'text-fetchy-text-muted hover:text-fetchy-text hover:bg-fetchy-border'
-              }`}
-            >
-              {type.label}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex-1 p-4 overflow-auto">
-          {request.auth.type === 'inherit' && (
-            <div className="space-y-4">
-              {inheritedAuth ? (
-                <div className="p-4 bg-fetchy-card rounded-lg border border-fetchy-border">
-                  <div className="flex items-center gap-2 text-fetchy-text mb-2">
-                    <Link size={16} className="text-fetchy-accent" />
-                    <span className="font-medium">Inheriting auth from parent</span>
-                  </div>
-                  <div className="text-sm text-fetchy-text-muted space-y-1">
-                    <p><span className="font-medium">Type:</span> {getAuthTypeLabel(inheritedAuth.type)}</p>
-                    {inheritedAuth.type === 'basic' && (
-                      <p><span className="font-medium">Username:</span> {inheritedAuth.basic?.username || '(not set)'}</p>
-                    )}
-                    {inheritedAuth.type === 'bearer' && (
-                      <p><span className="font-medium">Token:</span> {inheritedAuth.bearer?.token ? '••••••••' : '(not set)'}</p>
-                    )}
-                    {inheritedAuth.type === 'api-key' && (
-                      <>
-                        <p><span className="font-medium">Key:</span> {inheritedAuth.apiKey?.key || '(not set)'}</p>
-                        <p><span className="font-medium">Add to:</span> {inheritedAuth.apiKey?.addTo === 'header' ? 'Header' : 'Query Params'}</p>
-                      </>
-                    )}
-                  </div>
-                </div>
-              ) : (
-                <div className="text-fetchy-text-muted text-center py-8">
-                  <p>No auth configured in parent collection or folder</p>
-                  <p className="text-xs mt-2">Configure auth at the collection or folder level to inherit it here</p>
-                </div>
-              )}
-            </div>
-          )}
-
-          {request.auth.type === 'none' && (
-            <div className="text-fetchy-text-muted text-center py-8">
-              <p>This request does not require authentication</p>
-            </div>
-          )}
-
-          {request.auth.type === 'basic' && (
-            <div className="space-y-4 max-w-md">
-              <div>
-                <label className="block text-sm text-fetchy-text-muted mb-1">Username</label>
-                <VariableInput
-                  value={request.auth.basic?.username || ''}
-                  onChange={(value) => handleChange({
-                    auth: { ...request.auth, basic: { ...request.auth.basic, username: value, password: request.auth.basic?.password || '' } }
-                  })}
-                  className="w-full"
-                  placeholder="Enter username"
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-fetchy-text-muted mb-1">Password</label>
-                <VariableInput
-                  value={request.auth.basic?.password || ''}
-                  onChange={(value) => handleChange({
-                    auth: { ...request.auth, basic: { ...request.auth.basic, username: request.auth.basic?.username || '', password: value } }
-                  })}
-                  className="w-full"
-                  placeholder="Enter password"
-                />
-              </div>
-            </div>
-          )}
-
-          {request.auth.type === 'bearer' && (
-            <div className="space-y-4 max-w-md">
-              <div>
-                <label className="block text-sm text-fetchy-text-muted mb-1">Token</label>
-                <VariableInput
-                  value={request.auth.bearer?.token || ''}
-                  onChange={(value) => handleChange({
-                    auth: { ...request.auth, bearer: { token: value } }
-                  })}
-                  className="w-full"
-                  placeholder="Enter bearer token"
-                />
-              </div>
-            </div>
-          )}
-
-          {request.auth.type === 'api-key' && (
-            <div className="space-y-4 max-w-md">
-              <div>
-                <label className="block text-sm text-fetchy-text-muted mb-1">Key</label>
-                <VariableInput
-                  value={request.auth.apiKey?.key || ''}
-                  onChange={(value) => handleChange({
-                    auth: { ...request.auth, apiKey: { ...request.auth.apiKey, key: value, value: request.auth.apiKey?.value || '', addTo: request.auth.apiKey?.addTo || 'header' } }
-                  })}
-                  className="w-full"
-                  placeholder="e.g., X-API-Key"
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-fetchy-text-muted mb-1">Value</label>
-                <VariableInput
-                  value={request.auth.apiKey?.value || ''}
-                  onChange={(value) => handleChange({
-                    auth: { ...request.auth, apiKey: { ...request.auth.apiKey, key: request.auth.apiKey?.key || '', value: value, addTo: request.auth.apiKey?.addTo || 'header' } }
-                  })}
-                  className="w-full"
-                  placeholder="Enter API key value"
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-fetchy-text-muted mb-1">Add to</label>
-                <select
-                  value={request.auth.apiKey?.addTo || 'header'}
-                  onChange={(e) => handleChange({
-                    auth: { ...request.auth, apiKey: { ...request.auth.apiKey, key: request.auth.apiKey?.key || '', value: request.auth.apiKey?.value || '', addTo: e.target.value as 'header' | 'query' } }
-                  })}
-                  className="w-full"
-                >
-                  <option value="header">Header</option>
-                  <option value="query">Query Params</option>
-                </select>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  };
-
   const urlBar = (
-      <div className="px-4 py-3 border-b border-fetchy-border flex items-center gap-2 bg-fetchy-bg relative">
-
-        <select
-          value={request.method}
-          onChange={(e) => handleChange({ method: e.target.value as HttpMethod })}
-          className="w-28 font-medium"
-        >
-          {HTTP_METHODS.map((method) => (
-            <option key={method} value={method}>{method}</option>
-          ))}
-        </select>
-
-        <VariableInput
-          value={request.url}
-          onChange={(url) => {
-            // Parse query params from URL and sync to Params tab
-            const qIndex = url.indexOf('?');
-            if (qIndex >= 0) {
-              const queryString = url.substring(qIndex + 1);
-              const pairs = queryString.split('&');
-              const parsed: KeyValue[] = pairs
-                .filter(p => p.length > 0)
-                .map(pair => {
-                  const eqIndex = pair.indexOf('=');
-                  const key = eqIndex >= 0 ? pair.substring(0, eqIndex) : pair;
-                  const value = eqIndex >= 0 ? pair.substring(eqIndex + 1) : '';
-                  return { id: uuidv4(), key: decodeURIComponent(key), value: decodeURIComponent(value), enabled: true };
-                });
-              // Keep any existing params that are disabled (user manually toggled off)
-              const disabledParams = (request.params || []).filter(p => !p.enabled);
-              handleChange({ url, params: [...parsed, ...disabledParams] });
-            } else {
-              handleChange({ url });
-            }
-          }}
-          onPaste={handleUrlPaste}
-          className="flex-1 text-sm"
-          placeholder="Enter request URL or paste a cURL command"
-        />
-
-        {/* cURL import flash indicator */}
-        {curlImportFlash && (
-          <div className="absolute top-full left-0 right-0 z-50 flex justify-center mt-1 pointer-events-none">
-            <div className="px-3 py-1.5 bg-green-500/90 text-white text-xs font-medium rounded-md shadow-lg flex items-center gap-1.5 animate-fade-in">
-              <Terminal size={12} /> cURL imported successfully
-            </div>
-          </div>
-        )}
-
-        <button
-          onClick={handleSend}
-          disabled={isLoading || !request.url}
-          className="btn btn-primary flex items-center gap-2 disabled:opacity-50"
-        >
-          {isLoading ? (
-            <>
-              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-              Sending
-            </>
-          ) : (
-            <>
-              <Send size={16} /> Send
-            </>
-          )}
-        </button>
-
-        <div className="relative">
-          <Tooltip content="Generate Code">
-            <button
-              onClick={() => setShowCodeDropdown(!showCodeDropdown)}
-              disabled={!request.url}
-              className="btn btn-secondary flex items-center gap-1.5 disabled:opacity-50 pr-2"
-            >
-              <Code size={16} className="text-purple-400" />
-              <span className="font-medium">Code</span>
-              <ChevronDown size={14} className="text-fetchy-text-muted" />
-            </button>
-          </Tooltip>
-
-          {showCodeDropdown && request.url && (
-            <>
-              <div
-                className="fixed inset-0 z-40"
-                onClick={() => setShowCodeDropdown(false)}
-              />
-              <div className="absolute top-full right-0 mt-1 w-48 bg-fetchy-bg border border-fetchy-border rounded-lg shadow-xl z-50 py-1 max-h-[400px] overflow-y-auto">
-                {[
-                  { id: 'curl', label: 'cURL', icon: '⚡' },
-                  { id: 'javascript', label: 'JavaScript', icon: '🟨' },
-                  { id: 'python', label: 'Python', icon: '🐍' },
-                  { id: 'java', label: 'Java', icon: '☕' },
-                  { id: 'dotnet', label: '.NET Core', icon: '🔷' },
-                  { id: 'go', label: 'Go', icon: '🐹' },
-                  { id: 'rust', label: 'Rust', icon: '🦀' },
-                  { id: 'cpp', label: 'C++', icon: '⚙️' },
-                ].map((lang) => (
-                  <button
-                    key={lang.id}
-                    onClick={() => handleShowCode(lang.id)}
-                    className="w-full px-4 py-2 text-left text-sm text-fetchy-text hover:bg-fetchy-border transition-colors flex items-center gap-2"
-                  >
-                    <span className="text-base">{lang.icon}</span>
-                    <span>{lang.label}</span>
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-      </div>
+    <UrlBar
+      method={request.method}
+      url={request.url}
+      params={request.params || []}
+      isLoading={isLoading}
+      curlImportFlash={curlImportFlash}
+      onChange={handleChange}
+      onPaste={handleUrlPaste}
+      onSend={handleSend}
+      onCancel={handleCancel}
+      onShowCode={handleShowCode}
+    />
   );
 
   return (
@@ -1047,33 +568,32 @@ export default function RequestPanel({ setResponse, setSentRequest, setIsLoading
       <div className="flex-1 overflow-hidden">
         {activeSection === 'params' && renderKeyValueTable('params')}
         {activeSection === 'headers' && renderKeyValueTable('headers')}
-        {activeSection === 'body' && renderBody()}
-        {activeSection === 'auth' && renderAuth()}
+        {activeSection === 'body' && (
+          <BodyEditor
+            body={request.body}
+            onChange={(body) => handleChange({ body })}
+          />
+        )}
+        {activeSection === 'auth' && (
+          <AuthEditor
+            auth={request.auth}
+            inheritedAuth={getInheritedAuth()}
+            onChange={(auth) => handleChange({ auth })}
+          />
+        )}
         {activeSection === 'preScript' && (
-          <div className="h-full flex">
-            <div className="flex-1 overflow-hidden">
-              <CodeEditor
-                ref={preScriptEditorRef}
-                value={request.preScript || ''}
-                onChange={(preScript) => handleChange({ preScript })}
-                language="javascript"
-              />
-            </div>
-            <ScriptSnippetsPanel type="pre" onInsert={(code) => preScriptEditorRef.current?.insertAtCursor(code)} />
-          </div>
+          <ScriptsEditor
+            type="pre"
+            value={request.preScript || ''}
+            onChange={(preScript) => handleChange({ preScript })}
+          />
         )}
         {activeSection === 'script' && (
-          <div className="h-full flex">
-            <div className="flex-1 overflow-hidden">
-              <CodeEditor
-                ref={postScriptEditorRef}
-                value={request.script || ''}
-                onChange={(script) => handleChange({ script })}
-                language="javascript"
-              />
-            </div>
-            <ScriptSnippetsPanel type="post" onInsert={(code) => postScriptEditorRef.current?.insertAtCursor(code)} />
-          </div>
+          <ScriptsEditor
+            type="post"
+            value={request.script || ''}
+            onChange={(script) => handleChange({ script })}
+          />
         )}
       </div>
 
@@ -1214,168 +734,6 @@ export default function RequestPanel({ setResponse, setSentRequest, setIsLoading
         onClose={() => setShowAIGenerateModal(false)}
         onApply={handleAIApplyRequest}
       />
-    </div>
-  );
-}
-
-// ─── Script Snippets Panel ────────────────────────────────────────────────────
-
-interface Snippet {
-  label: string;
-  description: string;
-  code: string;
-}
-
-const PRE_SCRIPT_SNIPPETS: Snippet[] = [
-  {
-    label: 'Set Env Variable',
-    description: 'Set a value in the active environment',
-    code: "fetchy.environment.set('key', 'value');",
-  },
-  {
-    label: 'Get Env Variable',
-    description: 'Read a value from the active environment',
-    code: "const value = fetchy.environment.get('key');",
-  },
-  {
-    label: 'Get All Variables',
-    description: 'Get an array of all environment variables',
-    code: "const vars = fetchy.environment.all();\nconsole.log(vars);",
-  },
-  {
-    label: 'Log Output',
-    description: 'Print a message to the Console tab',
-    code: "console.log('message');",
-  },
-  {
-    label: 'Random UUID',
-    description: 'Generate a UUID and store it as an env variable',
-    code: "const uuid = crypto.randomUUID();\nfetchy.environment.set('uuid', uuid);\nconsole.log('UUID:', uuid);",
-  },
-  {
-    label: 'Unix Timestamp',
-    description: 'Store the current Unix timestamp as an env variable',
-    code: "const ts = String(Date.now());\nfetchy.environment.set('timestamp', ts);\nconsole.log('Timestamp:', ts);",
-  },
-  {
-    label: 'Random Number',
-    description: 'Generate a random integer in a range',
-    code: "const rand = String(Math.floor(Math.random() * 1000));\nfetchy.environment.set('randomNum', rand);",
-  },
-  {
-    label: 'Dynamic Auth Token',
-    description: 'Use an existing env var as bearer in a header',
-    code: "// Make sure 'token' is set in your environment\n// fetchy.environment.set('token', '<your-token-here>');",
-  },
-];
-
-const POST_SCRIPT_SNIPPETS: Snippet[] = [
-  {
-    label: 'Log Response',
-    description: 'Print the full response body to the Console tab',
-    code: "console.log(fetchy.response.data);",
-  },
-  {
-    label: 'Get Response Status',
-    description: 'Read the HTTP status code',
-    code: "const status = fetchy.response.status;\nconsole.log('Status:', status);",
-  },
-  {
-    label: 'Get Response Header',
-    description: 'Read a specific response header',
-    code: "const ct = fetchy.response.headers['content-type'];\nconsole.log('Content-Type:', ct);",
-  },
-  {
-    label: 'Extract & Store Field',
-    description: 'Pull a field from the JSON response and save it as an env variable',
-    code: "const value = fetchy.response.data.field;\nfetchy.environment.set('key', value);",
-  },
-  {
-    label: 'Store Token',
-    description: 'Save an access token from the response body',
-    code: "const token = fetchy.response.data.access_token\n  || fetchy.response.data.token;\nif (token) {\n  fetchy.environment.set('token', token);\n  console.log('Token saved.');\n}",
-  },
-  {
-    label: 'Check Status 200',
-    description: 'Log a message only when the request succeeds',
-    code: "if (fetchy.response.status === 200) {\n  console.log('Request succeeded!');\n} else {\n  console.log('Unexpected status:', fetchy.response.status);\n}",
-  },
-  {
-    label: 'Set Env Variable',
-    description: 'Set a value in the active environment',
-    code: "fetchy.environment.set('key', 'value');",
-  },
-  {
-    label: 'Get Env Variable',
-    description: 'Read a value from the active environment',
-    code: "const value = fetchy.environment.get('key');",
-  },
-  {
-    label: 'Log All Env Vars',
-    description: 'Print every environment variable to the Console',
-    code: "const vars = fetchy.environment.all();\nconsole.log(vars);",
-  },
-];
-
-interface ScriptSnippetsPanelProps {
-  type: 'pre' | 'post';
-  onInsert: (code: string) => void;
-}
-
-function ScriptSnippetsPanel({ type, onInsert }: ScriptSnippetsPanelProps) {
-  const snippets = type === 'pre' ? PRE_SCRIPT_SNIPPETS : POST_SCRIPT_SNIPPETS;
-  const [expanded, setExpanded] = useState(true);
-
-  return (
-    <div
-      className={`h-full border-l border-fetchy-border bg-fetchy-card flex flex-col transition-all duration-200 ${
-        expanded ? 'w-56' : 'w-8'
-      }`}
-    >
-      {/* Header */}
-      <div className="flex items-center justify-between px-2 py-2 border-b border-fetchy-border shrink-0">
-        {expanded && (
-          <span className="text-xs font-semibold text-fetchy-text-muted uppercase tracking-wide truncate">
-            Snippets
-          </span>
-        )}
-        <button
-          onClick={() => setExpanded(!expanded)}
-          className="ml-auto p-0.5 rounded hover:bg-fetchy-border text-fetchy-text-muted hover:text-fetchy-text transition-colors"
-          title={expanded ? 'Collapse snippets' : 'Expand snippets'}
-        >
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 14 14"
-            fill="none"
-            className={`transition-transform ${expanded ? '' : 'rotate-180'}`}
-          >
-            <path d="M9 3L5 7l4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </button>
-      </div>
-
-      {/* Snippet list */}
-      {expanded && (
-        <div className="flex-1 overflow-y-auto p-1.5 space-y-1">
-          {snippets.map((snippet) => (
-            <button
-              key={snippet.label}
-              onClick={() => onInsert(snippet.code)}
-              className="w-full text-left px-2 py-1.5 rounded text-xs hover:bg-fetchy-border transition-colors group"
-              title={snippet.description}
-            >
-              <span className="block font-medium text-fetchy-accent group-hover:text-fetchy-accent truncate">
-                {snippet.label}
-              </span>
-              <span className="block text-fetchy-text-muted truncate mt-0.5 text-[10px]">
-                {snippet.description}
-              </span>
-            </button>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

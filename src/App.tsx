@@ -21,7 +21,10 @@ import ThemeToggle from './components/ThemeToggle';
 import ResizeHandle from './components/ResizeHandle';
 import Tooltip from './components/Tooltip';
 import OpenApiEditor from './components/OpenApiEditor';
-import { useAppStore } from './store/appStore';
+import CollectionConfigPanel from './components/CollectionConfigPanel';
+import ResolveConflictsDialog from './components/ResolveConflictsDialog';
+import { useAppStore, rehydrateWorkspace } from './store/appStore';
+import { invalidateWriteCache } from './store/persistence';
 import { usePreferencesStore } from './store/preferencesStore';
 import { useWorkspacesStore } from './store/workspacesStore';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
@@ -66,6 +69,10 @@ function App() {
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [postUpdateInfo, setPostUpdateInfo] = useState<any>(null);
+
+  // Merge conflict resolver dialog state
+  const [showConflictResolver, setShowConflictResolver] = useState(false);
+  const [conflictResolverFiles, setConflictResolverFiles] = useState<string[]>([]);
 
   // ── Post-update banner (shown once after a successful update) ─────────────
   useEffect(() => {
@@ -211,6 +218,8 @@ function App() {
     if (!api?.onStorageFileChanged) return;
 
     const listener = api.onStorageFileChanged(() => {
+      // Invalidate the write cache so rehydrate reads fresh files from disk
+      invalidateWriteCache();
       // Rehydrate the zustand store from disk
       useAppStore.persist.rehydrate();
     });
@@ -223,6 +232,7 @@ function App() {
   const activeTab = tabs.find(t => t.id === activeTabId);
   const hasActiveRequest = activeTab?.type === 'request';
   const hasActiveOpenApi = activeTab?.type === 'openapi';
+  const hasActiveCollection = activeTab?.type === 'collection';
 
   // Load history response/request when switching to a history tab
   useEffect(() => {
@@ -376,7 +386,7 @@ function App() {
   }
 
   if (workspaces.length === 0 || !activeWorkspaceId || !activeWorkspace) {
-    return <CreateWorkspaceScreen onCreated={() => window.location.reload()} />;
+    return <CreateWorkspaceScreen onCreated={() => rehydrateWorkspace()} />;
   }
 
   return (
@@ -495,6 +505,10 @@ function App() {
             <div className="flex-1 overflow-hidden">
               <OpenApiEditor documentId={activeTab?.openApiDocId} />
             </div>
+          ) : hasActiveCollection ? (
+            <div className="flex-1 overflow-hidden">
+              <CollectionConfigPanel collectionId={activeTab?.collectionId!} />
+            </div>
           ) : (
             <WelcomeScreen
               onImportRequest={handleImportRequest}
@@ -593,7 +607,54 @@ function App() {
           isOpen={showSettingsModal}
           onClose={() => setShowSettingsModal(false)}
           onOpenWorkspaces={() => setShowWorkspacesModal(true)}
+          onOpenConflictResolver={async () => {
+            // Fetch conflict files and open the resolver
+            const api = window.electronAPI;
+            if (!api || !activeWorkspace?.homeDirectory) return;
+            try {
+              const conflictsRes = await api.gitMergeConflicts({ directory: activeWorkspace.homeDirectory });
+              if (conflictsRes.success && conflictsRes.files.length > 0) {
+                setConflictResolverFiles(conflictsRes.files);
+                setShowConflictResolver(true);
+              }
+            } catch {
+              // silently fail
+            }
+          }}
           initialTab={settingsInitialTab}
+        />
+      )}
+
+      {showConflictResolver && activeWorkspace?.homeDirectory && (
+        <ResolveConflictsDialog
+          isOpen={showConflictResolver}
+          onClose={() => setShowConflictResolver(false)}
+          homeDirectory={activeWorkspace.homeDirectory}
+          conflictFiles={conflictResolverFiles}
+          onCompleteMerge={async () => {
+            // User completed the merge — commit the resolution (do NOT auto-push)
+            const api = window.electronAPI;
+            if (!api || !activeWorkspace?.homeDirectory) return;
+            const result = await api.gitAddCommit({
+              directory: activeWorkspace.homeDirectory,
+              message: 'Merge conflict resolution',
+            });
+            if (result.success) {
+              invalidateWriteCache();
+              await useAppStore.persist.rehydrate();
+              setShowConflictResolver(false);
+              setConflictResolverFiles([]);
+            }
+          }}
+          onAbortMerge={async () => {
+            const api = window.electronAPI;
+            if (!api || !activeWorkspace?.homeDirectory) return;
+            await api.gitMergeAbort({ directory: activeWorkspace.homeDirectory });
+            invalidateWriteCache();
+            await useAppStore.persist.rehydrate();
+            setShowConflictResolver(false);
+            setConflictResolverFiles([]);
+          }}
         />
       )}
 

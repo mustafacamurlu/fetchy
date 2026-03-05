@@ -1,0 +1,78 @@
+{
+  "env": {
+    "browser": true,
+    "es2020": true,
+    "node": true
+  },
+  "extends": [
+    "eslint:recommended",
+    "plugin:@typescript-eslint/recommended",
+    "plugin:react/recommended",
+    "plugin:react/jsx-runtime",
+    "plugin:react-hooks/recommended",
+    "prettier"
+  ],
+  "parser": "@typescript-eslint/parser",
+  "parserOptions": {
+    "ecmaVersion": 2020,
+    "sourceType": "module",
+    "ecmaFeatures": {
+      "jsx": true
+    }
+  },
+  "plugins": ["@typescript-eslint", "react", "react-hooks"],
+  "settings": {
+    "react": {
+      "version": "detect"
+    }
+  },
+  "rules": {
+    // TypeScript handles these better
+    "no-unused-vars": "off",
+    "@typescript-eslint/no-unused-vars": [
+      "warn",
+      {
+        "argsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_",
+        "destructuredArrayIgnorePattern": "^_"
+      }
+    ],
+    // Allow explicit `any` since the codebase uses it in store/persistence code
+    "@typescript-eslint/no-explicit-any": "off",
+    // React 18+ JSX transform — no need to import React
+    "react/react-in-jsx-scope": "off",
+    // Allow non-null assertions in store code
+    "@typescript-eslint/no-non-null-assertion": "off",
+    // Hooks rules
+    "react-hooks/rules-of-hooks": "error",
+    "react-hooks/exhaustive-deps": "warn",
+    // Useful for catching bugs
+    "no-console": "off",
+    "prefer-const": "warn",
+    "no-duplicate-imports": "error",
+    // Empty catch blocks are common in persistence/parsing code
+    "no-empty": "warn",
+    // Unescaped entities — many pre-existing; warn for now
+    "react/no-unescaped-entities": "warn",
+    // PropTypes not used with TypeScript
+    "react/prop-types": "off",
+    // Chained optional + non-null assertion — warn, not error
+    "@typescript-eslint/no-non-null-asserted-optional-chain": "warn",
+    // Dynamic require in CJS interop modules
+    "@typescript-eslint/no-var-requires": "warn",
+    // Useless escape in regex — warn, some are intentional
+    "no-useless-escape": "warn"
+  },
+  "ignorePatterns": [
+    "dist/",
+    "release/",
+    "build/",
+    "node_modules/",
+    "electron/",
+    "docs/",
+    "scripts/",
+    "*.config.js",
+    "postcss.config.js",
+    "tailwind.config.js"
+  ]
+}

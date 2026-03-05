@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getDataPath: () => ipcRenderer.invoke('get-data-path'),
   readData: (filename) => ipcRenderer.invoke('read-data', filename),
   writeData: (data) => ipcRenderer.invoke('write-data', data),
+  listDataDir: (subDir) => ipcRenderer.invoke('list-data-dir', subDir),
+  deleteDataFile: (filename) => ipcRenderer.invoke('delete-data-file', filename),
 
   // Secrets storage (stored in secrets directory)
   readSecrets: () => ipcRenderer.invoke('read-secrets'),
@@ -35,6 +37,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // HTTP request (bypasses CORS)
   httpRequest: (data) => ipcRenderer.invoke('http-request', data),
+  abortHttpRequest: (requestId) => ipcRenderer.invoke('abort-http-request', requestId),
 
   // AI request (provider-agnostic, routed in main process)
   aiRequest: (data) => ipcRenderer.invoke('ai-request', data),
@@ -53,6 +56,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   gitRemoteSet: (data) => ipcRenderer.invoke('git-remote-set', data),
   gitFetch: (data) => ipcRenderer.invoke('git-fetch', data),
   gitCheckPullAvailable: (data) => ipcRenderer.invoke('git-check-pull-available', data),
+  gitMergeConflicts: (data) => ipcRenderer.invoke('git-merge-conflicts', data),
+  gitIsMerging: (data) => ipcRenderer.invoke('git-is-merging', data),
+  gitShowConflictVersion: (data) => ipcRenderer.invoke('git-show-conflict-version', data),
+  gitResolveConflict: (data) => ipcRenderer.invoke('git-resolve-conflict', data),
+  gitResolveAllConflicts: (data) => ipcRenderer.invoke('git-resolve-all-conflicts', data),
+  gitMergeAbort: (data) => ipcRenderer.invoke('git-merge-abort', data),
+  gitReadFileContent: (data) => ipcRenderer.invoke('git-read-file-content', data),
+  gitShowBaseVersion: (data) => ipcRenderer.invoke('git-show-base-version', data),
+  gitWriteResolvedContent: (data) => ipcRenderer.invoke('git-write-resolved-content', data),
 
   // Storage file change events (fired when file changes externally, e.g. after git pull)
   onStorageFileChanged: (callback) => {

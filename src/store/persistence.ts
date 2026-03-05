@@ -1,7 +1,45 @@
 ﻿import { StateStorage } from 'zustand/middleware';
 import { RequestHistoryItem, Collection, Environment, SecretsStorage } from '../types';
+import { migrateState } from './dataMigration';
 
-// Full storage export interface (legacy / v1 \u2013 kept for backward compatibility)
+// ---------------------------------------------------------------------------
+// Debounced persistence (#7)
+// ---------------------------------------------------------------------------
+// Wraps a StateStorage so that `setItem` calls are debounced — at most one
+// write occurs per DEBOUNCE_MS window.  This prevents every keystroke from
+// serialising the entire state to disk.
+// ---------------------------------------------------------------------------
+
+const DEBOUNCE_MS = 1_500;
+
+export function createDebouncedStorage(inner: StateStorage): StateStorage {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let latestValue: string | null = null;
+  let latestName: string | null = null;
+
+  return {
+    getItem: (name: string) => inner.getItem(name),
+
+    setItem: (name: string, value: string) => {
+      latestName = name;
+      latestValue = value;
+
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (latestName !== null && latestValue !== null) {
+          inner.setItem(latestName, latestValue);
+        }
+        timer = null;
+        latestValue = null;
+        latestName = null;
+      }, DEBOUNCE_MS);
+    },
+
+    removeItem: (name: string) => inner.removeItem(name),
+  };
+}
+
+// Full storage export interface (legacy / v1 - kept for backward compatibility)
 export interface AppStorageExport {
   version: string;
   exportedAt: string;
@@ -14,54 +52,84 @@ export interface AppStorageExport {
 // Check if running in Electron
 export const isElectron =
   typeof window !== 'undefined' && !!(window as any).electronAPI;
-// ─────────────────────────────────────────────────────────────────────────────
+
+// ---------------------------------------------------------------------------
 // Git auto-sync (debounced)
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
 
 let gitSyncTimer: ReturnType<typeof setTimeout> | null = null;
+
+// ---------------------------------------------------------------------------
+// Git auto-sync callback (#31)
+// ---------------------------------------------------------------------------
+// To avoid a circular `require()` between persistence.ts and workspacesStore,
+// we use a callback pattern.  workspacesStore registers a callback at init time
+// that provides the info persistence needs to decide if/how to git-sync.
+// ---------------------------------------------------------------------------
+
+interface GitSyncInfo {
+  gitAutoSync: boolean;
+  homeDirectory: string;
+}
+
+/** Callback that returns git sync info for the active workspace, or null. */
+type GitSyncInfoProvider = () => GitSyncInfo | null;
+
+let _gitSyncInfoProvider: GitSyncInfoProvider | null = null;
+
+/**
+ * Register a callback that provides git sync info for the active workspace.
+ * Called by workspacesStore at module init time to break the circular dependency.
+ */
+export function registerGitSyncProvider(provider: GitSyncInfoProvider) {
+  _gitSyncInfoProvider = provider;
+}
 
 /**
  * Trigger a debounced git auto-commit+push if the active workspace has
  * gitAutoSync enabled.  Called after every successful write to storage.
+ * Skips sync when a merge is in progress to avoid committing half-resolved conflicts.
  */
 function triggerGitAutoSync() {
   if (!isElectron) return;
-  try {
-    // Dynamically import workspacesStore to avoid circular deps
-    // We read the store state lazily
-    const { useWorkspacesStore } = require('./workspacesStore');
-    const state = useWorkspacesStore.getState();
-    const active = state.workspaces.find(
-      (w: any) => w.id === state.activeWorkspaceId
-    );
-    if (!active?.gitAutoSync || !active.homeDirectory) return;
+  if (!_gitSyncInfoProvider) return;
 
-    // Debounce: wait 3 seconds after last write before syncing
-    if (gitSyncTimer) clearTimeout(gitSyncTimer);
-    gitSyncTimer = setTimeout(async () => {
-      try {
-        const api = (window as any).electronAPI;
-        if (!api?.gitAddCommitPush) return;
-        await api.gitAddCommitPush({
-          directory: active.homeDirectory,
-          message: `Fetchy auto-sync ${new Date().toISOString()}`,
-        });
-      } catch (e) {
-        console.error('Git auto-sync failed:', e);
+  const info = _gitSyncInfoProvider();
+  if (!info?.gitAutoSync || !info.homeDirectory) return;
+
+  if (gitSyncTimer) clearTimeout(gitSyncTimer);
+  gitSyncTimer = setTimeout(async () => {
+    try {
+      const api = (window as any).electronAPI;
+      if (!api?.gitAddCommitPush) return;
+
+      // Do NOT auto-sync while a merge conflict is in progress
+      if (api.gitIsMerging) {
+        const mergeState = await api.gitIsMerging({ directory: info.homeDirectory });
+        if (mergeState?.merging) {
+          console.warn('Git auto-sync skipped: merge in progress');
+          return;
+        }
       }
-    }, 3000);
-  } catch {
-    // workspacesStore not ready yet – ignore
-  }
+
+      await api.gitAddCommitPush({
+        directory: info.homeDirectory,
+        message: `Fetchy auto-sync ${new Date().toISOString()}`,
+      });
+    } catch (e) {
+      console.error('Git auto-sync failed:', e);
+    }
+  }, 3000);
 }
-// ─────────────────────────────────────────────────────────────────────────────
+
+// ---------------------------------------------------------------------------
 // Secrets helpers
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
 
 /**
  * Extract secret variable values from state and return:
- *  - `cleanState`:  state with secret .value / .currentValue cleared
- *  - `secretsMap`:  map of "env:{envId}:{varId}" | "col:{colId}:{varId}" \u2192 value
+ *  - cleanState:  state with secret .value / .currentValue cleared
+ *  - secretsMap:  map of "env:{envId}:{varId}" | "col:{colId}:{varId}" -> value
  */
 function extractSecrets(stateWrapper: any): {
   cleanState: any;
@@ -71,8 +139,6 @@ function extractSecrets(stateWrapper: any): {
   if (!stateWrapper?.state) return { cleanState: stateWrapper, secretsMap };
 
   const state = stateWrapper.state;
-
-  // Deep clone via JSON for simplicity
   const cleanStateInner = JSON.parse(JSON.stringify(state));
 
   // Environments
@@ -82,7 +148,6 @@ function extractSecrets(stateWrapper: any): {
         for (const variable of env.variables) {
           if (variable.isSecret) {
             const key = `env:${env.id}:${variable.id}`;
-            // Use || (not ??) so empty strings fall through to the next candidate
             secretsMap[key] = variable.currentValue || variable.value || variable.initialValue || '';
             variable.value = '';
             variable.currentValue = '';
@@ -100,7 +165,6 @@ function extractSecrets(stateWrapper: any): {
         for (const variable of col.variables) {
           if (variable.isSecret) {
             const key = `col:${col.id}:${variable.id}`;
-            // Use || (not ??) so empty strings fall through to the next candidate
             secretsMap[key] = variable.currentValue || variable.value || variable.initialValue || '';
             variable.value = '';
             variable.currentValue = '';
@@ -119,11 +183,6 @@ function extractSecrets(stateWrapper: any): {
 
 /**
  * Strip transient (script-set) environment variable values.
- *
- * - Removes variables created entirely by scripts (`_fromScript` flag)
- * - Clears `currentValue` ONLY on variables where `_scriptOverride` is set
- *   (i.e. the value was set by a pre/post script, not by the user in the UI)
- * - User-set `currentValue` is preserved across restarts
  */
 function stripTransientEnvValues(stateWrapper: any): any {
   if (!stateWrapper?.state) return stateWrapper;
@@ -133,18 +192,13 @@ function stripTransientEnvValues(stateWrapper: any): any {
     for (const env of state.environments) {
       if (!Array.isArray(env.variables)) continue;
       env.variables = env.variables
-        .filter((v: any) => {
-          // Remove variables created entirely by scripts
-          return !v._fromScript;
-        })
+        .filter((v: any) => !v._fromScript)
         .map((v: any) => {
           const { _fromScript, _scriptOverride, ...rest } = v;
           if (_scriptOverride) {
-            // Script-set currentValue – clear it so it resets on restart
-            const { currentValue, ...clean } = rest;
+            const { currentValue: _cv, ...clean } = rest;
             return clean;
           }
-          // User-set currentValue – keep it
           return rest;
         });
     }
@@ -201,99 +255,377 @@ function mergeSecrets(
   return stateWrapper;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Custom storage factory
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Write-content cache to avoid unnecessary disk I/O
+// ---------------------------------------------------------------------------
+const writeContentCache: Record<string, string> = {};
+
+async function writeIfChanged(api: any, filename: string, content: string) {
+  if (writeContentCache[filename] === content) return;
+  writeContentCache[filename] = content;
+  await api.writeData({ filename, content });
+}
+
+/**
+ * Invalidate the write-content cache so the next write is always applied.
+ * Called after operations like git pull where files changed externally.
+ */
+export function invalidateWriteCache() {
+  for (const key of Object.keys(writeContentCache)) {
+    delete writeContentCache[key];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Shared prepare / hydrate pipeline (#27)
+// ---------------------------------------------------------------------------
+// Both the Electron split-file adapter and the browser localStorage adapter
+// perform the same sequence of pre-write and post-read transformations:
+//   Write: truncateHistoryBodies → stripTransient → extractSecrets
+//   Read:  mergeSecrets → stripTransient
+// Rather than duplicating this in every adapter, we expose two composable
+// pipeline functions that every adapter calls before doing I/O.
+// ---------------------------------------------------------------------------
+
+const MAX_HISTORY_BODY_SIZE = 5_000;
+
+/**
+ * Prepare a state wrapper for persistence.
+ *
+ * Steps (applied in order):
+ *   1. Trim large response bodies in history.
+ *   2. Strip transient (script-set) env variable values.
+ *   3. Extract secret values into a separate map.
+ *
+ * Returns the cleaned state wrapper and the extracted secrets map.
+ */
+export function prepareForWrite(stateWrapper: any): {
+  cleanState: any;
+  secretsMap: Record<string, string>;
+} {
+  // 1. Trim large history bodies
+  if (stateWrapper?.state?.history) {
+    stateWrapper.state.history = stateWrapper.state.history.map(
+      (item: any) => {
+        if (item?.response?.body && item.response.body.length > MAX_HISTORY_BODY_SIZE) {
+          return {
+            ...item,
+            response: {
+              ...item.response,
+              body: item.response.body.slice(0, MAX_HISTORY_BODY_SIZE) + '\n... [truncated for storage]',
+            },
+          };
+        }
+        return item;
+      }
+    );
+  }
+
+  // 2. Strip transient env values
+  stripTransientEnvValues(stateWrapper);
+
+  // 3. Extract secrets
+  return extractSecrets(stateWrapper);
+}
+
+/**
+ * Hydrate a state wrapper loaded from storage.
+ *
+ * Steps (applied in order):
+ *   1. Merge secret values back into the state.
+ *   2. Strip transient (script-set) env variable values.
+ *
+ * Returns the hydrated state wrapper.
+ */
+export function hydrateAfterRead(stateWrapper: any, secretsMap: Record<string, string>): any {
+  // 1. Merge secrets
+  const merged = mergeSecrets(stateWrapper, secretsMap);
+  // 2. Strip transient env values
+  return stripTransientEnvValues(merged);
+}
+
+// ---------------------------------------------------------------------------
+// Migration: single-file -> split-file format
+// ---------------------------------------------------------------------------
+
+async function migrateToSplitStorage(api: any, oldDataRaw: string) {
+  try {
+    const oldData = JSON.parse(oldDataRaw);
+    const state = oldData.state || oldData;
+
+    const meta = {
+      activeEnvironmentId: state.activeEnvironmentId ?? null,
+      sidebarWidth: state.sidebarWidth ?? 280,
+      sidebarCollapsed: state.sidebarCollapsed ?? false,
+      requestPanelWidth: state.requestPanelWidth ?? 50,
+      panelLayout: state.panelLayout ?? 'horizontal',
+    };
+    await api.writeData({ filename: 'meta.json', content: JSON.stringify(meta, null, 2) });
+
+    if (Array.isArray(state.collections)) {
+      for (const col of state.collections) {
+        await api.writeData({
+          filename: `collections/${col.id}.json`,
+          content: JSON.stringify(col, null, 2),
+        });
+      }
+    }
+
+    if (Array.isArray(state.environments)) {
+      for (const env of state.environments) {
+        await api.writeData({
+          filename: `environments/${env.id}.json`,
+          content: JSON.stringify(env, null, 2),
+        });
+      }
+    }
+
+    if (Array.isArray(state.history)) {
+      await api.writeData({
+        filename: 'history.json',
+        content: JSON.stringify(state.history, null, 2),
+      });
+    }
+
+    if (Array.isArray(state.openApiDocuments)) {
+      for (const doc of state.openApiDocuments) {
+        await api.writeData({
+          filename: `openapi-docs/${doc.id}.json`,
+          content: JSON.stringify(doc, null, 2),
+        });
+      }
+    }
+
+    // Remove the old single file so migration doesn't run again
+    await api.deleteDataFile('fetchy-storage.json');
+
+    console.log('Successfully migrated from single-file to split-file storage.');
+  } catch (error) {
+    console.error('Migration from single file failed:', error);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Custom storage factory (split-file for Electron, localStorage fallback)
+// ---------------------------------------------------------------------------
 
 export const createCustomStorage = (): StateStorage => {
   if (isElectron) {
     return {
-      getItem: async (name: string): Promise<string | null> => {
+      getItem: async (_name: string): Promise<string | null> => {
         try {
-          // 1. Read public data from home directory
-          const raw = await (window as any).electronAPI.readData(`${name}.json`);
-          if (!raw) return null;
+          const api = (window as any).electronAPI;
 
-          let stateWrapper = JSON.parse(raw);
+          // Check for old single-file format and migrate
+          const oldData = await api.readData('fetchy-storage.json');
+          if (oldData) {
+            await migrateToSplitStorage(api, oldData);
+          }
 
-          // 2. Read secrets from secrets directory
+          // Read split files
+          const metaRaw = await api.readData('meta.json');
+          if (!metaRaw && !oldData) return null;
+
+          let meta: any = {};
+          if (metaRaw) {
+            try { meta = JSON.parse(metaRaw); } catch {}
+          }
+
+          // Collections
+          const collectionFiles: string[] = await api.listDataDir('collections');
+          const collections: any[] = [];
+          for (const file of collectionFiles) {
+            const content = await api.readData(`collections/${file}`);
+            if (content) {
+              try { collections.push(JSON.parse(content)); } catch {
+                console.warn(`Skipping corrupt collection file: ${file}`);
+              }
+            }
+          }
+
+          // Environments
+          const envFiles: string[] = await api.listDataDir('environments');
+          const environments: any[] = [];
+          for (const file of envFiles) {
+            const content = await api.readData(`environments/${file}`);
+            if (content) {
+              try { environments.push(JSON.parse(content)); } catch {
+                console.warn(`Skipping corrupt environment file: ${file}`);
+              }
+            }
+          }
+
+          // History
+          let history: any[] = [];
+          const historyRaw = await api.readData('history.json');
+          if (historyRaw) {
+            try { history = JSON.parse(historyRaw); } catch {}
+          }
+
+          // OpenAPI documents
+          const openapiFiles: string[] = await api.listDataDir('openapi-docs');
+          const openApiDocuments: any[] = [];
+          for (const file of openapiFiles) {
+            const content = await api.readData(`openapi-docs/${file}`);
+            if (content) {
+              try { openApiDocuments.push(JSON.parse(content)); } catch {
+                console.warn(`Skipping corrupt OpenAPI doc file: ${file}`);
+              }
+            }
+          }
+
+          // Assemble state
+          const state = {
+            collections,
+            environments,
+            activeEnvironmentId: meta.activeEnvironmentId ?? null,
+            history,
+            sidebarWidth: meta.sidebarWidth ?? 280,
+            sidebarCollapsed: meta.sidebarCollapsed ?? false,
+            requestPanelWidth: meta.requestPanelWidth ?? 50,
+            panelLayout: meta.panelLayout ?? 'horizontal',
+            openApiDocuments,
+          };
+
+          let stateWrapper = { state, version: 0 };
+
+          // Hydrate: merge secrets + strip transient values (#27 shared pipeline)
           try {
-            const secretsRaw = await (window as any).electronAPI.readSecrets();
+            const secretsRaw = await api.readSecrets();
             if (secretsRaw) {
               const secretsStorage: SecretsStorage = JSON.parse(secretsRaw);
               if (secretsStorage?.secrets) {
-                stateWrapper = mergeSecrets(stateWrapper, secretsStorage.secrets);
+                stateWrapper = hydrateAfterRead(stateWrapper, secretsStorage.secrets);
+              } else {
+                stateWrapper = stripTransientEnvValues(stateWrapper);
               }
+            } else {
+              stateWrapper = stripTransientEnvValues(stateWrapper);
             }
           } catch {
-            // secrets file missing or corrupt \u2013 not fatal
+            stateWrapper = stripTransientEnvValues(stateWrapper);
           }
-          // 3. Strip transient (script-set) env var values
-          stateWrapper = stripTransientEnvValues(stateWrapper);
+
+          // Run schema migrations (#28)
+          stateWrapper = migrateState(stateWrapper);
+
           return JSON.stringify(stateWrapper);
         } catch (error) {
-          console.error('Error reading from file storage:', error);
+          console.error('Error reading from split file storage:', error);
           return null;
         }
       },
 
-      setItem: async (name: string, value: string): Promise<void> => {
+      setItem: async (_name: string, value: string): Promise<void> => {
         try {
+          const api = (window as any).electronAPI;
           const stateWrapper = JSON.parse(value);
 
-          // Trim large response bodies from history to prevent oversized storage
-          if (stateWrapper?.state?.history) {
-            const MAX_BODY_SIZE = 5_000;
-            stateWrapper.state.history = stateWrapper.state.history.map(
-              (item: any) => {
-                if (item?.response?.body && item.response.body.length > MAX_BODY_SIZE) {
-                  return {
-                    ...item,
-                    response: {
-                      ...item.response,
-                      body: item.response.body.slice(0, MAX_BODY_SIZE) + '\n... [truncated for storage]',
-                    },
-                  };
+          // Shared write pipeline: truncate history, strip transient, extract secrets (#27)
+          const { cleanState, secretsMap } = prepareForWrite(stateWrapper);
+          const state = cleanState.state;
+
+          // Write meta.json
+          const meta = {
+            activeEnvironmentId: state.activeEnvironmentId,
+            sidebarWidth: state.sidebarWidth,
+            sidebarCollapsed: state.sidebarCollapsed,
+            requestPanelWidth: state.requestPanelWidth,
+            panelLayout: state.panelLayout,
+          };
+          await writeIfChanged(api, 'meta.json', JSON.stringify(meta, null, 2));
+
+          // Write individual collections
+          if (Array.isArray(state.collections)) {
+            const currentIds = new Set<string>();
+            for (const col of state.collections) {
+              currentIds.add(col.id);
+              await writeIfChanged(api, `collections/${col.id}.json`, JSON.stringify(col, null, 2));
+            }
+            try {
+              const existingFiles: string[] = await api.listDataDir('collections');
+              for (const file of existingFiles) {
+                const id = file.replace('.json', '');
+                if (!currentIds.has(id)) {
+                  await api.deleteDataFile(`collections/${file}`);
+                  delete writeContentCache[`collections/${file}`];
                 }
-                return item;
               }
-            );
+            } catch {}
           }
 
-          // 1. Strip transient values before writing
-          stripTransientEnvValues(stateWrapper);
+          // Write individual environments
+          if (Array.isArray(state.environments)) {
+            const currentIds = new Set<string>();
+            for (const env of state.environments) {
+              currentIds.add(env.id);
+              await writeIfChanged(api, `environments/${env.id}.json`, JSON.stringify(env, null, 2));
+            }
+            try {
+              const existingFiles: string[] = await api.listDataDir('environments');
+              for (const file of existingFiles) {
+                const id = file.replace('.json', '');
+                if (!currentIds.has(id)) {
+                  await api.deleteDataFile(`environments/${file}`);
+                  delete writeContentCache[`environments/${file}`];
+                }
+              }
+            } catch {}
+          }
 
-          // 2. Extract secrets
-          const { cleanState, secretsMap } = extractSecrets(stateWrapper);
+          // Write history
+          if (Array.isArray(state.history)) {
+            await writeIfChanged(api, 'history.json', JSON.stringify(state.history, null, 2));
+          }
 
-          // 2. Write public data (no secret values) to home directory
-          await (window as any).electronAPI.writeData({
-            filename: `${name}.json`,
-            content: JSON.stringify(cleanState),
-          });
+          // Write individual OpenAPI documents
+          if (Array.isArray(state.openApiDocuments)) {
+            const currentIds = new Set<string>();
+            for (const doc of state.openApiDocuments) {
+              currentIds.add(doc.id);
+              await writeIfChanged(api, `openapi-docs/${doc.id}.json`, JSON.stringify(doc, null, 2));
+            }
+            try {
+              const existingFiles: string[] = await api.listDataDir('openapi-docs');
+              for (const file of existingFiles) {
+                const id = file.replace('.json', '');
+                if (!currentIds.has(id)) {
+                  await api.deleteDataFile(`openapi-docs/${file}`);
+                  delete writeContentCache[`openapi-docs/${file}`];
+                }
+              }
+            } catch {}
+          }
 
-          // 3. Write secrets to secrets directory
+          // Write secrets
           const secretsStorage: SecretsStorage = {
             version: '1.0',
             secrets: secretsMap,
           };
-          await (window as any).electronAPI.writeSecrets({
+          await api.writeSecrets({
             content: JSON.stringify(secretsStorage, null, 2),
           });
 
-          // 4. Trigger git auto-sync if enabled
+          // Trigger git auto-sync
           triggerGitAutoSync();
         } catch (error) {
-          console.error('Error writing to file storage:', error);
+          console.error('Error writing to split file storage:', error);
         }
       },
 
-      removeItem: async (name: string): Promise<void> => {
+      removeItem: async (_name: string): Promise<void> => {
         try {
-          await (window as any).electronAPI.writeData({
-            filename: `${name}.json`,
-            content: '{}',
-          });
+          const api = (window as any).electronAPI;
+          await api.deleteDataFile('meta.json');
+          await api.deleteDataFile('history.json');
+          for (const dir of ['collections', 'environments', 'openapi-docs']) {
+            try {
+              const files: string[] = await api.listDataDir(dir);
+              for (const file of files) {
+                await api.deleteDataFile(`${dir}/${file}`);
+              }
+            } catch {}
+          }
         } catch (error) {
           console.error('Error removing from file storage:', error);
         }
@@ -301,7 +633,7 @@ export const createCustomStorage = (): StateStorage => {
     };
   }
 
-  // ── Browser / localStorage fallback ────────────────────────────────────────
+  // -- Browser / localStorage fallback ----------------------------------------
   return {
     getItem: (name: string): string | null => {
       const raw = localStorage.getItem(name);
@@ -309,15 +641,23 @@ export const createCustomStorage = (): StateStorage => {
 
       try {
         let stateWrapper = JSON.parse(raw);
+
+        // Hydrate: merge secrets + strip transient values (#27 shared pipeline)
         const secretsRaw = localStorage.getItem(`${name}-secrets`);
         if (secretsRaw) {
           const secretsStorage: SecretsStorage = JSON.parse(secretsRaw);
           if (secretsStorage?.secrets) {
-            stateWrapper = mergeSecrets(stateWrapper, secretsStorage.secrets);
+            stateWrapper = hydrateAfterRead(stateWrapper, secretsStorage.secrets);
+          } else {
+            stateWrapper = stripTransientEnvValues(stateWrapper);
           }
+        } else {
+          stateWrapper = stripTransientEnvValues(stateWrapper);
         }
-        // Strip transient (script-set) env var values
-        stateWrapper = stripTransientEnvValues(stateWrapper);
+
+        // Run schema migrations (#28)
+        stateWrapper = migrateState(stateWrapper);
+
         return JSON.stringify(stateWrapper);
       } catch {
         return raw;
@@ -328,29 +668,8 @@ export const createCustomStorage = (): StateStorage => {
       try {
         const stateWrapper = JSON.parse(value);
 
-        // Trim large response bodies from history to prevent quota overflow
-        if (stateWrapper?.state?.history) {
-          const MAX_BODY_SIZE = 5_000;
-          stateWrapper.state.history = stateWrapper.state.history.map(
-            (item: any) => {
-              if (item?.response?.body && item.response.body.length > MAX_BODY_SIZE) {
-                return {
-                  ...item,
-                  response: {
-                    ...item.response,
-                    body: item.response.body.slice(0, MAX_BODY_SIZE) + '\n... [truncated for storage]',
-                  },
-                };
-              }
-              return item;
-            }
-          );
-        }
-
-        // Strip transient values before writing
-        stripTransientEnvValues(stateWrapper);
-
-        const { cleanState, secretsMap } = extractSecrets(stateWrapper);
+        // Shared write pipeline: truncate history, strip transient, extract secrets (#27)
+        const { cleanState, secretsMap } = prepareForWrite(stateWrapper);
         localStorage.setItem(name, JSON.stringify(cleanState));
         const secretsStorage: SecretsStorage = { version: '1.0', secrets: secretsMap };
         localStorage.setItem(`${name}-secrets`, JSON.stringify(secretsStorage));

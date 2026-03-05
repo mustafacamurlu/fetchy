@@ -1,5 +1,7 @@
 ﻿import { create } from 'zustand';
 import { Workspace, WorkspacesConfig, WorkspaceExport } from '../types';
+import { rehydrateWorkspace } from './appStore';
+import { registerGitSyncProvider } from './persistence';
 
 interface WorkspacesStore {
   workspaces: Workspace[];
@@ -132,9 +134,9 @@ export const useWorkspacesStore = create<WorkspacesStore>()((set, get) => ({
 
     set({ workspaces: newWorkspaces, activeWorkspaceId: newActiveId });
 
-    // If the active workspace changed, reload
+    // If the active workspace changed, rehydrate stores from the new workspace
     if (activeWorkspaceId === id) {
-      setTimeout(() => window.location.reload(), 300);
+      setTimeout(() => rehydrateWorkspace(), 300);
     }
   },
 
@@ -151,8 +153,8 @@ export const useWorkspacesStore = create<WorkspacesStore>()((set, get) => ({
     }
 
     set({ activeWorkspaceId: id });
-    // Reload to reinitialise stores with the new workspace's data
-    setTimeout(() => window.location.reload(), 200);
+    // Rehydrate stores with the new workspace's data (no full page reload)
+    setTimeout(() => rehydrateWorkspace(), 200);
   },
 
   updateWorkspace: async (id, updates) => {
@@ -171,9 +173,9 @@ export const useWorkspacesStore = create<WorkspacesStore>()((set, get) => ({
 
     set({ workspaces: newWorkspaces });
 
-    // If the active workspace's directories changed, reload
+    // If the active workspace's directories changed, rehydrate from new paths
     if (id === activeWorkspaceId && (updates.homeDirectory || updates.secretsDirectory)) {
-      setTimeout(() => window.location.reload(), 300);
+      setTimeout(() => rehydrateWorkspace(), 300);
     }
   },
 
@@ -247,3 +249,11 @@ export const useWorkspacesStore = create<WorkspacesStore>()((set, get) => ({
     return workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
   },
 }));
+
+// Register the git sync provider callback (#31 — breaks circular require)
+registerGitSyncProvider(() => {
+  const state = useWorkspacesStore.getState();
+  const active = state.workspaces.find((w) => w.id === state.activeWorkspaceId);
+  if (!active?.gitAutoSync || !active.homeDirectory) return null;
+  return { gitAutoSync: active.gitAutoSync, homeDirectory: active.homeDirectory };
+});

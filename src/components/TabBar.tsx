@@ -1,14 +1,55 @@
-import { X, Clock, FileCode } from 'lucide-react';
+import { X, Clock, FileCode, FolderCog } from 'lucide-react';
 import { useAppStore } from '../store/appStore';
 import { getMethodBgColor } from '../utils/helpers';
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { TabState } from '../types';
 
 export default function TabBar() {
-  const { tabs, activeTabId, setActiveTab, closeTab, getRequest } = useAppStore();
+  const {
+    tabs, activeTabId, setActiveTab, closeTab, getRequest,
+    updateRequest, updateCollection, updateEnvironment, updateOpenApiDocument,
+  } = useAppStore();
   const [hoveredTab, setHoveredTab] = useState<string | null>(null);
   const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 });
   const tabRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
   const [contextMenu, setContextMenu] = useState<{ tabId: string; x: number; y: number } | null>(null);
+  const [editingTabId, setEditingTabId] = useState<string | null>(null);
+  const [editingValue, setEditingValue] = useState('');
+  const editInputRef = useRef<HTMLInputElement>(null);
+
+  // Focus and select all text when an edit session starts
+  useEffect(() => {
+    if (editingTabId && editInputRef.current) {
+      editInputRef.current.focus();
+      editInputRef.current.select();
+    }
+  }, [editingTabId]);
+
+  const handleDoubleClick = useCallback((e: React.MouseEvent, tab: TabState) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // History items cannot be renamed
+    if (tab.isHistoryItem) return;
+    setHoveredTab(null);
+    setEditingTabId(tab.id);
+    setEditingValue(tab.title);
+  }, []);
+
+  const commitRename = useCallback((tab: TabState, newName: string) => {
+    const trimmed = newName.trim();
+    setEditingTabId(null);
+    if (!trimmed || trimmed === tab.title) return;
+
+    if (tab.type === 'request' && tab.collectionId && tab.requestId) {
+      updateRequest(tab.collectionId, tab.requestId, { name: trimmed });
+    } else if (tab.type === 'collection' && tab.collectionId) {
+      updateCollection(tab.collectionId, { name: trimmed });
+    } else if (tab.type === 'environment' && tab.environmentId) {
+      updateEnvironment(tab.environmentId, { name: trimmed });
+    } else if (tab.type === 'openapi' && tab.openApiDocId) {
+      updateOpenApiDocument(tab.openApiDocId, { name: trimmed });
+    }
+  }, [updateRequest, updateCollection, updateEnvironment, updateOpenApiDocument]);
 
   const handleMouseEnter = (tabId: string) => {
     const tabElement = tabRefs.current[tabId];
@@ -150,8 +191,9 @@ export default function TabBar() {
                 closeTab(tab.id);
               }
             }}
-            onMouseEnter={() => handleMouseEnter(tab.id)}
+            onMouseEnter={() => !editingTabId && handleMouseEnter(tab.id)}
             onMouseLeave={() => setHoveredTab(null)}
+            onDoubleClick={(e) => handleDoubleClick(e, tab)}
           >
             {/* History Badge */}
             {tab.isHistoryItem && (
@@ -171,6 +213,15 @@ export default function TabBar() {
               </span>
             )}
 
+            {/* Collection Badge */}
+            {tab.type === 'collection' && (
+              <span
+                className="flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium bg-yellow-500/20 text-yellow-400 rounded border border-yellow-500/30 shrink-0"
+              >
+                <FolderCog size={10} />
+              </span>
+            )}
+
             {/* HTTP Method Badge - Show for all request tabs */}
             {request && (
               <span
@@ -181,7 +232,28 @@ export default function TabBar() {
             )}
 
             {/* Tab Title */}
-            <span className="text-sm truncate flex-1 min-w-0">{tab.title}</span>
+            {editingTabId === tab.id ? (
+              <input
+                ref={editInputRef}
+                className="text-sm flex-1 min-w-0 bg-fetchy-input border border-fetchy-accent rounded px-1 outline-none text-fetchy-text w-full"
+                value={editingValue}
+                onChange={(e) => setEditingValue(e.target.value)}
+                onBlur={() => commitRename(tab, editingValue)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    commitRename(tab, editingValue);
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    setEditingTabId(null);
+                  }
+                }}
+                onClick={(e) => e.stopPropagation()}
+                onDoubleClick={(e) => e.stopPropagation()}
+              />
+            ) : (
+              <span className="text-sm truncate flex-1 min-w-0">{tab.title}</span>
+            )}
 
             {/* Modified Indicator */}
             {tab.isModified && (

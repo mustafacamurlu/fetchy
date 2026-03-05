@@ -49,6 +49,10 @@ export interface ApiRequest {
   script?: string;
   /** When false, TLS certificate verification is skipped for this request. Default: true */
   sslVerification?: boolean;
+  /** Runtime-only: ID of the parent container (folder or collection). Not persisted. */
+  parentId?: string;
+  /** Runtime-only: type of the parent container. Not persisted. */
+  parentType?: 'collection' | 'folder';
 }
 
 export interface ApiResponse {
@@ -58,6 +62,12 @@ export interface ApiResponse {
   body: string;
   time: number;
   size: number;
+  /** How the body string is encoded. Defaults to 'utf-8' (plain text). */
+  bodyEncoding?: 'utf-8' | 'base64';
+  /** True when the in-memory body was truncated to save RAM (#8). */
+  bodyTruncated?: boolean;
+  /** Original untruncated body size in bytes (set only when truncated). */
+  fullBodySize?: number;
   preScriptError?: string;
   preScriptOutput?: string;
   scriptError?: string;
@@ -72,6 +82,10 @@ export interface RequestFolder {
   folders: RequestFolder[];
   expanded?: boolean;
   auth?: RequestAuth;
+  /** Runtime-only: ID of the parent container (folder or collection). Not persisted. */
+  parentId?: string;
+  /** Runtime-only: type of the parent container. Not persisted. */
+  parentType?: 'collection' | 'folder';
 }
 
 export interface Collection {
@@ -83,6 +97,8 @@ export interface Collection {
   variables?: KeyValue[];
   expanded?: boolean;
   auth?: RequestAuth;
+  preScript?: string;
+  script?: string;
 }
 
 export interface Environment {
@@ -122,6 +138,7 @@ export interface CustomThemeColors {
   warningColor: string;
   errorColor: string;
   aiColor: string;
+  highlightColor: string;
 }
 
 export interface CustomTheme {
@@ -192,6 +209,17 @@ export type AIFeatureType =
   | 'generate-docs'
   | 'suggest-name';
 
+export interface ProxySettings {
+  /** 'none' = no proxy, 'system' = use env vars, 'manual' = use configured URL */
+  mode: 'none' | 'system' | 'manual';
+  /** Proxy URL for manual mode (e.g. http://proxy.corp.com:8080) */
+  url: string;
+  /** Optional username for proxy authentication */
+  username?: string;
+  /** Optional password for proxy authentication */
+  password?: string;
+}
+
 export interface AppPreferences {
   homeDirectory: string | null; // Legacy – kept for backward compat
   theme: BuiltinTheme | string; // string for custom theme IDs
@@ -199,6 +227,8 @@ export interface AppPreferences {
   maxHistoryItems: number;
   customThemes: CustomTheme[];
   aiSettings: AISettings;
+  /** Proxy configuration for HTTP requests (#25) */
+  proxy?: ProxySettings;
 }
 
 // OpenAPI types
@@ -399,6 +429,8 @@ export interface GitOperationResult {
   success: boolean;
   output?: string;
   error?: string;
+  /** Set on pull failure when a merge conflict is detected */
+  mergeConflict?: boolean;
 }
 
 export interface GitLogResult {
@@ -413,6 +445,22 @@ export interface GitRemoteResult {
   error?: string;
 }
 
+export interface GitMergeConflictsResult {
+  success: boolean;
+  files: string[];
+  error?: string;
+}
+
+export interface GitConflictVersionResult {
+  success: boolean;
+  content: string;
+  error?: string;
+}
+
+export interface GitIsMergingResult {
+  merging: boolean;
+}
+
 // Electron API type definition
 export interface ElectronAPI {
   httpRequest: (data: {
@@ -420,8 +468,12 @@ export interface ElectronAPI {
     method: string;
     headers: Record<string, string>;
     body?: string;
+    /** Serialised FormData entries for multipart requests (#24). */
+    formData?: Array<{ key: string; value: string }>;
     sslVerification?: boolean;
+    requestId?: string;
   }) => Promise<ApiResponse>;
+  abortHttpRequest: (requestId: string) => Promise<boolean>;
   aiRequest: (data: {
     provider: AIProvider;
     apiKey: string;
@@ -432,10 +484,19 @@ export interface ElectronAPI {
     maxTokens?: number;
   }) => Promise<AIResponseResult>;
   openFile: (options?: { filters?: Array<{ name: string; extensions: string[] }> }) => Promise<{ filePath: string; content: string } | null>;
-  saveFile: (data: { content: string; defaultPath?: string; filters?: Array<{ name: string; extensions: string[] }> }) => Promise<string | null>;
+  saveFile: (data: {
+    content: string | number[];
+    defaultPath?: string;
+    defaultName?: string;
+    filters?: Array<{ name: string; extensions: string[] }>;
+    /** When true, content is a number[] (serialised Uint8Array) written as raw binary (#23). */
+    binary?: boolean;
+  }) => Promise<string | null>;
   getDataPath: () => Promise<string>;
   readData: (filename: string) => Promise<string | null>;
   writeData: (data: { filename: string; content: string }) => Promise<boolean>;
+  listDataDir: (subDir: string) => Promise<string[]>;
+  deleteDataFile: (filename: string) => Promise<boolean>;
   // Secrets
   readSecrets: () => Promise<string | null>;
   writeSecrets: (data: { content: string }) => Promise<boolean>;
@@ -474,6 +535,20 @@ export interface ElectronAPI {
   gitRemoteGet: (data: { directory: string }) => Promise<GitRemoteResult>;
   gitRemoteSet: (data: { directory: string; url: string }) => Promise<GitOperationResult>;
   gitFetch: (data: { directory: string }) => Promise<GitOperationResult>;
+  gitMergeConflicts: (data: { directory: string }) => Promise<GitMergeConflictsResult>;
+  gitIsMerging: (data: { directory: string }) => Promise<GitIsMergingResult>;
+  gitShowConflictVersion: (data: { directory: string; filepath: string; version: 'ours' | 'theirs' }) => Promise<GitConflictVersionResult>;
+  gitResolveConflict: (data: { directory: string; filepath: string; content: string }) => Promise<GitOperationResult>;
+  gitResolveAllConflicts: (data: { directory: string; strategy: 'ours' | 'theirs' }) => Promise<GitOperationResult>;
+  gitMergeAbort: (data: { directory: string }) => Promise<GitOperationResult>;
+  gitReadFileContent: (data: { directory: string; filepath: string }) => Promise<GitConflictVersionResult>;
+  gitShowBaseVersion: (data: { directory: string; filepath: string }) => Promise<GitConflictVersionResult>;
+  gitWriteResolvedContent: (data: { directory: string; filepath: string; content: string }) => Promise<GitOperationResult>;
+  // Storage file change events
+  onStorageFileChanged: (callback: () => void) => (() => void);
+  offStorageFileChanged?: (listener: () => void) => void;
+  // Pull availability check
+  gitCheckPullAvailable: (data: { directory: string }) => Promise<{ isRepo: boolean; hasPull: boolean; count: number; noRemote?: boolean; error?: string }>;
 }
 
 // Extend Window interface globally

@@ -1,5 +1,4 @@
 import { useState, useRef, useMemo, useCallback, useEffect } from 'react';
-import * as yaml from 'js-yaml';
 import {
   DndContext,
   closestCenter,
@@ -18,39 +17,32 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import {
-  FolderPlus,
   FilePlus,
   ChevronRight,
   ChevronDown,
   ChevronUp,
   Folder,
-  Trash2,
-  Edit2,
-  Copy,
   Plus,
   Clock,
-  Download,
   Upload,
-  Key,
   Filter,
   ArrowUpDown,
   X,
-  MoveRight,
   FileCode,
-  Play,
 } from 'lucide-react';
 import { useAppStore } from '../store/appStore';
 import { Collection, RequestFolder, ApiRequest, RequestHistoryItem } from '../types';
-import { getMethodBgColor, exportToPostman, importOpenAPISpec } from '../utils/helpers';
-import { DEFAULT_OPENAPI_YAML } from './openapi/constants';
+import { getMethodBgColor } from '../utils/helpers';
 import CollectionAuthModal from './CollectionAuthModal';
 import RunCollectionModal from './RunCollectionModal';
 import Tooltip from './Tooltip';
-import SortableApiDocItem from './sidebar/SortableApiDocItem';
 import SortableCollectionItem from './sidebar/SortableCollectionItem';
 import SortableRequestItem from './sidebar/SortableRequestItem';
 import SortableFolderItem from './sidebar/SortableFolderItem';
-import type { SortOption, FilterMethod, DragItem } from './sidebar/types';
+import HistoryPanel from './sidebar/HistoryPanel';
+import ApiDocsPanel from './sidebar/ApiDocsPanel';
+import SidebarContextMenu from './sidebar/SidebarContextMenu';
+import type { ContextMenuState, SortOption, FilterMethod, DragItem } from './sidebar/types';
 
 interface SidebarProps {
   onImport: () => void;
@@ -63,32 +55,22 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
     collections,
     addCollection,
     updateCollection,
-    deleteCollection,
     toggleCollectionExpanded,
     addFolder,
     updateFolder,
-    deleteFolder,
     toggleFolderExpanded,
     addRequest,
     updateRequest,
-    deleteRequest,
-    duplicateRequest,
     openTab,
     updateTab,
     tabs,
     activeTabId,
-    history,
-    clearHistory,
     reorderCollections,
     reorderRequests,
     reorderFolders,
     moveRequest,
     moveFolder,
     openApiDocuments,
-    addOpenApiDocument,
-    updateOpenApiDocument,
-    deleteOpenApiDocument,
-    reorderOpenApiDocuments,
   } = useAppStore();
 
   // Determine which request is currently active based on the open tab
@@ -100,21 +82,11 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
   const sidebarRef = useRef<HTMLDivElement>(null);
   const [authModal, setAuthModal] = useState<{ open: boolean; collectionId: string; folderId?: string } | null>(null);
   const [runCollectionModal, setRunCollectionModal] = useState<{ open: boolean; collectionId: string } | null>(null);
-  const [contextMenu, setContextMenu] = useState<{
-    x: number;
-    y: number;
-    type: 'collection' | 'folder' | 'request';
-    collectionId: string;
-    folderId?: string;
-    requestId?: string;
-  } | null>(null);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
-  const [editingApiSpecId, setEditingApiSpecId] = useState<string | null>(null);
-  const [editingApiSpecName, setEditingApiSpecName] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
-  const apiSpecInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Keyboard navigation state for search results
@@ -123,7 +95,7 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
   // Filter and sort states
   const [searchQuery, setSearchQuery] = useState('');
   const [filterMethod, setFilterMethod] = useState<FilterMethod>('all');
-  const [sortOption, setSortOption] = useState<SortOption>('name-asc');
+  const [sortOption, setSortOption] = useState<SortOption>('created');
   const [showFilterMenu, setShowFilterMenu] = useState(false);
 
   // API Spec filter and sort states
@@ -405,10 +377,6 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
       const collectionId = idStr.replace('collection-', '');
       const index = collections.findIndex(c => c.id === collectionId);
       setActiveDragData({ type: 'collection', id: collectionId, collectionId, index });
-    } else if (idStr.startsWith('api-doc-')) {
-      const apiDocId = idStr.replace('api-doc-', '');
-      const index = filteredApiDocuments.findIndex(doc => doc.id === apiDocId);
-      setActiveDragData({ type: 'api-doc', id: apiDocId, collectionId: '', index });
     } else if (idStr.startsWith('request-')) {
       const data = active.data.current;
       if (data) {
@@ -446,24 +414,6 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
 
     const activeIdStr = active.id as string;
     const overIdStr = over.id as string;
-
-    // Handle API document reordering
-    if (activeIdStr.startsWith('api-doc-') && overIdStr.startsWith('api-doc-')) {
-      const activeApiDocId = activeIdStr.replace('api-doc-', '');
-      const overApiDocId = overIdStr.replace('api-doc-', '');
-      const oldIndex = filteredApiDocuments.findIndex(doc => doc.id === activeApiDocId);
-      const newIndex = filteredApiDocuments.findIndex(doc => doc.id === overApiDocId);
-      if (oldIndex !== -1 && newIndex !== -1) {
-        // Map back to original indices in the complete list
-        const originalOldIndex = openApiDocuments.findIndex(doc => doc.id === activeApiDocId);
-        const originalNewIndex = openApiDocuments.findIndex(doc => doc.id === overApiDocId);
-        if (originalOldIndex !== -1 && originalNewIndex !== -1) {
-          setApiSortOption('created'); // Reset sort to manual order
-          reorderOpenApiDocuments(originalOldIndex, originalNewIndex);
-        }
-      }
-      return;
-    }
 
     // Handle collection reordering
     if (activeIdStr.startsWith('collection-') && overIdStr.startsWith('collection-')) {
@@ -599,42 +549,6 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
     return null;
   };
 
-  const formatHistoryTime = (timestamp: number): string => {
-    const now = Date.now();
-    const diff = now - timestamp;
-    const seconds = Math.floor(diff / 1000);
-    const minutes = Math.floor(seconds / 60);
-    const hours = Math.floor(minutes / 60);
-    const days = Math.floor(hours / 24);
-
-    if (days > 0) return `${days}d ago`;
-    if (hours > 0) return `${hours}h ago`;
-    if (minutes > 0) return `${minutes}m ago`;
-    return 'Just now';
-  };
-
-  const formatResponseSize = (bytes: number): string => {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  };
-
-  const handleExportCollection = (collectionId: string) => {
-    const collection = collections.find(c => c.id === collectionId);
-    if (!collection) return;
-
-    const postmanJson = exportToPostman(collection);
-    const blob = new Blob([postmanJson], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${collection.name.replace(/\s+/g, '_')}.postman_collection.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
   const expandAllFolders = (folders: RequestFolder[]): RequestFolder[] => {
     return folders.map(folder => ({
       ...folder,
@@ -733,6 +647,13 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
         key={collection.id}
         collection={collection}
         onToggle={() => toggleCollectionExpanded(collection.id)}
+        onDoubleClick={() => {
+          openTab({
+            type: 'collection',
+            title: collection.name,
+            collectionId: collection.id,
+          });
+        }}
         onContextMenu={(e) => handleContextMenu(e, 'collection', collection.id)}
         editingId={editingId}
         editingName={editingName}
@@ -783,37 +704,6 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
       </SortableCollectionItem>
     );
   };
-
-  const renderHistoryItem = (item: RequestHistoryItem) => (
-    <div
-      key={item.id}
-      className="tree-item px-2 py-2 cursor-pointer group rounded hover:bg-fetchy-border mb-1 border border-transparent hover:border-fetchy-border"
-      title={`${item.request.method} ${item.request.url}\nClick to load this request and response`}
-      onClick={() => onHistoryItemClick?.(item)}
-    >
-      <div className="flex items-center gap-2">
-        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded w-[52px] text-center ${getMethodBgColor(item.request.method)}`}>
-          {item.request.method}
-        </span>
-        <span className="text-sm text-fetchy-text truncate flex-1">{item.request.name || item.request.url}</span>
-        <span className="text-xs text-fetchy-text-muted whitespace-nowrap">
-          {formatHistoryTime(item.timestamp)}
-        </span>
-      </div>
-      <div className="text-xs text-fetchy-text-muted truncate mt-1 ml-7">
-        {item.request.url}
-      </div>
-      {item.response && (
-        <div className="flex items-center gap-3 mt-1 ml-7 text-xs">
-          <span className={`font-medium ${item.response.status >= 200 && item.response.status < 300 ? 'text-green-400' : item.response.status >= 400 ? 'text-red-400' : 'text-yellow-400'}`}>
-            {item.response.status} {item.response.statusText}
-          </span>
-          <span className="text-fetchy-text-muted">{item.response.time}ms</span>
-          <span className="text-fetchy-text-muted">{formatResponseSize(item.response.size)}</span>
-        </div>
-      )}
-    </div>
-  );
 
   // Build flat list of visible requests for keyboard navigation
   const flatVisibleRequests = useMemo(() => {
@@ -1168,531 +1058,29 @@ export default function Sidebar({ onImport, onHistoryItemClick }: SidebarProps) 
             </DndContext>
           </div>
         ) : activeTab === 'api' ? (
-          <div>
-            {/* API Section Header */}
-            <div className="flex items-center justify-between mb-3 px-1">
-              <span className="text-xs text-fetchy-text-muted">
-                {filteredApiDocuments.length} spec{filteredApiDocuments.length !== 1 ? 's' : ''}
-                {filteredApiDocuments.length !== openApiDocuments.length && (
-                  <span className="text-fetchy-text-muted"> ({openApiDocuments.length} total)</span>
-                )}
-              </span>
-              <button
-                onClick={() => {
-                  const doc = addOpenApiDocument('New API Spec', DEFAULT_OPENAPI_YAML, 'yaml');
-                  openTab({
-                    type: 'openapi',
-                    title: doc.name,
-                    openApiDocId: doc.id,
-                  });
-                }}
-                className="text-xs text-fetchy-accent hover:text-fetchy-accent/80 flex items-center gap-1"
-              >
-                <Plus size={12} /> New Spec
-              </button>
-            </div>
-
-            {openApiDocuments.length === 0 ? (
-              <div className="text-center py-8 text-fetchy-text-muted">
-                <FileCode size={32} className="mx-auto mb-4 opacity-50" />
-                <p className="text-sm mb-2">No OpenAPI specs yet</p>
-                <p className="text-xs mb-4">Create a new spec to get started</p>
-                <button
-                  onClick={() => {
-                    const doc = addOpenApiDocument('New API Spec', DEFAULT_OPENAPI_YAML, 'yaml');
-                    openTab({
-                      type: 'openapi',
-                      title: doc.name,
-                      openApiDocId: doc.id,
-                    });
-                  }}
-                  className="btn btn-primary text-sm"
-                >
-                  Create OpenAPI Spec
-                </button>
-              </div>
-            ) : filteredApiDocuments.length === 0 ? (
-              <div className="text-center py-8 text-fetchy-text-muted">
-                <FileCode size={32} className="mx-auto mb-4 opacity-50" />
-                <p className="text-sm mb-2">No matching specs found</p>
-                <p className="text-xs">Try adjusting your search or filters</p>
-              </div>
-            ) : (
-              <DndContext
-                sensors={sensors}
-                collisionDetection={closestCenter}
-                onDragStart={handleDragStart}
-                onDragOver={handleDragOver}
-                onDragEnd={handleDragEnd}
-              >
-                <SortableContext
-                  items={filteredApiDocuments.map(doc => `api-doc-${doc.id}`)}
-                  strategy={verticalListSortingStrategy}
-                >
-                  <div className="space-y-1">
-                    {filteredApiDocuments.map((doc) => (
-                      <SortableApiDocItem
-                        key={doc.id}
-                        doc={doc}
-                        onClick={() => {
-                          if (editingApiSpecId !== doc.id) {
-                            openTab({
-                              type: 'openapi',
-                              title: doc.name,
-                              openApiDocId: doc.id,
-                            });
-                          }
-                        }}
-                        onEdit={(e) => {
-                          e.stopPropagation();
-                          setEditingApiSpecId(doc.id);
-                          setEditingApiSpecName(doc.name);
-                          setTimeout(() => apiSpecInputRef.current?.focus(), 0);
-                        }}
-                        onDelete={(e) => {
-                          e.stopPropagation();
-                          if (confirm('Delete this OpenAPI spec?')) {
-                            deleteOpenApiDocument(doc.id);
-                          }
-                        }}
-                        onGenerateCollection={(e) => {
-                          e.stopPropagation();
-                          if (!doc.content.trim()) {
-                            alert('This OpenAPI spec is empty. Add content before generating a collection.');
-                            return;
-                          }
-                          const collection = importOpenAPISpec(doc.content);
-                          if (collection) {
-                            useAppStore.getState().importCollection(collection);
-                            alert(`Collection "${collection.name}" has been created successfully!`);
-                          } else {
-                            alert('Failed to generate collection. Please check the OpenAPI spec format.');
-                          }
-                        }}
-                        onConvertToYaml={(e) => {
-                          e.stopPropagation();
-                          if (!doc.content.trim()) {
-                            alert('This OpenAPI spec is empty. Add content before converting.');
-                            return;
-                          }
-                          try {
-                            const parsed = JSON.parse(doc.content);
-                            const yamlContent = yaml.dump(parsed, { indent: 2, lineWidth: -1 });
-                            updateOpenApiDocument(doc.id, { content: yamlContent, format: 'yaml' });
-                          } catch (error) {
-                            alert('Failed to convert to YAML. Please check the JSON format.');
-                          }
-                        }}
-                        onConvertToJson={(e) => {
-                          e.stopPropagation();
-                          if (!doc.content.trim()) {
-                            alert('This OpenAPI spec is empty. Add content before converting.');
-                            return;
-                          }
-                          try {
-                            const parsed = yaml.load(doc.content);
-                            const jsonContent = JSON.stringify(parsed, null, 2);
-                            updateOpenApiDocument(doc.id, { content: jsonContent, format: 'json' });
-                          } catch (error) {
-                            alert('Failed to convert to JSON. Please check the YAML format.');
-                          }
-                        }}
-                        onExport={(e) => {
-                          e.stopPropagation();
-                          if (!doc.content.trim()) {
-                            alert('This OpenAPI spec is empty. Add content before exporting.');
-                            return;
-                          }
-                          const extension = doc.format === 'yaml' ? 'yaml' : 'json';
-                          const blob = new Blob([doc.content], { type: 'text/plain' });
-                          const url = URL.createObjectURL(blob);
-                          const a = document.createElement('a');
-                          a.href = url;
-                          a.download = `${doc.name}.${extension}`;
-                          document.body.appendChild(a);
-                          a.click();
-                          document.body.removeChild(a);
-                          URL.revokeObjectURL(url);
-                        }}
-                        editingId={editingApiSpecId}
-                        editingName={editingApiSpecName}
-                        setEditingName={setEditingApiSpecName}
-                        inputRef={apiSpecInputRef}
-                        onEditComplete={() => {
-                          if (editingApiSpecName.trim()) {
-                            const newName = editingApiSpecName.trim();
-                            updateOpenApiDocument(doc.id, { name: newName });
-
-                            // Update all tabs with this openApiDocId to reflect the new name
-                            tabs.forEach(tab => {
-                              if (tab.openApiDocId === doc.id) {
-                                updateTab(tab.id, { title: newName });
-                              }
-                            });
-                          }
-                          setEditingApiSpecId(null);
-                        }}
-                      />
-                    ))}
-                  </div>
-                </SortableContext>
-                <DragOverlay>
-                  {activeId && activeDragData && activeDragData.type === 'api-doc' && (
-                    <div className="bg-fetchy-card border border-fetchy-accent rounded px-3 py-2 shadow-lg opacity-90">
-                      <span className="text-sm text-fetchy-text">
-                        {filteredApiDocuments.find(doc => doc.id === activeDragData.id)?.name || 'Moving spec...'}
-                      </span>
-                    </div>
-                  )}
-                </DragOverlay>
-              </DndContext>
-            )}
-          </div>
-        ) : activeTab === 'history' && history.length === 0 ? (
-          <div className="text-center py-8 text-fetchy-text-muted">
-            <Clock size={32} className="mx-auto mb-4 opacity-50" />
-            <p className="text-sm mb-2">No request history yet</p>
-            <p className="text-xs">Your past requests will appear here</p>
-          </div>
+          <ApiDocsPanel
+            filteredApiDocuments={filteredApiDocuments}
+            onResetSort={() => setApiSortOption('created')}
+          />
         ) : activeTab === 'history' ? (
-          <div>
-            <div className="flex items-center justify-between mb-2 px-1">
-              <span className="text-xs text-fetchy-text-muted">{history.length} request{history.length !== 1 ? 's' : ''}</span>
-              <button
-                onClick={clearHistory}
-                className="text-xs text-red-400 hover:text-red-300"
-              >
-                Clear All
-              </button>
-            </div>
-            {history.map(renderHistoryItem)}
-          </div>
+          <HistoryPanel onHistoryItemClick={onHistoryItemClick} />
         ) : null}
       </div>
 
       {/* Context Menu */}
       {contextMenu && (
-        <>
-          <div className="fixed inset-0 z-40" onClick={closeContextMenu} />
-          <div
-            className="context-menu fixed z-50 bg-fetchy-dropdown border border-fetchy-border rounded-lg shadow-xl py-1 min-w-[160px]"
-            style={{ left: contextMenu.x, top: contextMenu.y }}
-          >
-            {contextMenu.type === 'collection' && (
-              <>
-                <button
-                  className="w-full px-3 py-2 text-left text-sm hover:bg-fetchy-border flex items-center gap-2"
-                  onClick={() => {
-                    setRunCollectionModal({ open: true, collectionId: contextMenu.collectionId });
-                    closeContextMenu();
-                  }}
-                >
-                  <Play size={14} /> Run Collection
-                </button>
-                <hr className="my-1 border-fetchy-border" />
-                <button
-                  className="w-full px-3 py-2 text-left text-sm hover:bg-fetchy-border flex items-center gap-2"
-                  onClick={() => {
-                    addRequest(contextMenu.collectionId, null);
-                    closeContextMenu();
-                  }}
-                >
-                  <FilePlus size={14} /> Add Request
-                </button>
-                <button
-                  className="w-full px-3 py-2 text-left text-sm hover:bg-fetchy-border flex items-center gap-2"
-                  onClick={() => {
-                    addFolder(contextMenu.collectionId, null, 'New Folder');
-                    closeContextMenu();
-                  }}
-                >
-                  <FolderPlus size={14} /> Add Folder
-                </button>
-                <button
-                  className="w-full px-3 py-2 text-left text-sm hover:bg-fetchy-border flex items-center gap-2"
-                  onClick={() => {
-                    const collection = collections.find(c => c.id === contextMenu.collectionId);
-                    if (collection) {
-                      setEditingId(collection.id);
-                      setEditingName(collection.name);
-                      closeContextMenu();
-                      setTimeout(() => inputRef.current?.focus(), 0);
-                    }
-                  }}
-                >
-                  <Edit2 size={14} /> Rename
-                </button>
-                <button
-                  className="w-full px-3 py-2 text-left text-sm hover:bg-fetchy-border flex items-center gap-2"
-                  onClick={() => {
-                    handleExportCollection(contextMenu.collectionId);
-                    closeContextMenu();
-                  }}
-                >
-                  <Download size={14} /> Export to Postman
-                </button>
-                <button
-                  className="w-full px-3 py-2 text-left text-sm hover:bg-fetchy-border flex items-center gap-2"
-                  onClick={() => {
-                    setAuthModal({ open: true, collectionId: contextMenu.collectionId });
-                    closeContextMenu();
-                  }}
-                >
-                  <Key size={14} /> Auth Settings
-                </button>
-                <hr className="my-1 border-fetchy-border" />
-                <button
-                  className="w-full px-3 py-2 text-left text-sm hover:bg-fetchy-border flex items-center gap-2 text-red-400"
-                  onClick={() => {
-                    deleteCollection(contextMenu.collectionId);
-                    closeContextMenu();
-                  }}
-                >
-                  <Trash2 size={14} /> Delete
-                </button>
-              </>
-            )}
-            {contextMenu.type === 'folder' && (
-              <>
-                <button
-                  className="w-full px-3 py-2 text-left text-sm hover:bg-fetchy-border flex items-center gap-2"
-                  onClick={() => {
-                    addRequest(contextMenu.collectionId, contextMenu.folderId!);
-                    closeContextMenu();
-                  }}
-                >
-                  <FilePlus size={14} /> Add Request
-                </button>
-                <button
-                  className="w-full px-3 py-2 text-left text-sm hover:bg-fetchy-border flex items-center gap-2"
-                  onClick={() => {
-                    addFolder(contextMenu.collectionId, contextMenu.folderId!, 'New Folder');
-                    closeContextMenu();
-                  }}
-                >
-                  <FolderPlus size={14} /> Add Subfolder
-                </button>
-                <button
-                  className="w-full px-3 py-2 text-left text-sm hover:bg-fetchy-border flex items-center gap-2"
-                  onClick={() => {
-                    // Find the folder to edit
-                    const collection = collections.find(c => c.id === contextMenu.collectionId);
-                    if (collection) {
-                      const folder = findFolderById(collection.folders, contextMenu.folderId!);
-                      if (folder) {
-                        setEditingId(folder.id);
-                        setEditingName(folder.name);
-                        closeContextMenu();
-                        setTimeout(() => inputRef.current?.focus(), 0);
-                      }
-                    }
-                  }}
-                >
-                  <Edit2 size={14} /> Rename
-                </button>
-                <button
-                  className="w-full px-3 py-2 text-left text-sm hover:bg-fetchy-border flex items-center gap-2"
-                  onClick={() => {
-                    setAuthModal({ open: true, collectionId: contextMenu.collectionId, folderId: contextMenu.folderId });
-                    closeContextMenu();
-                  }}
-                >
-                  <Key size={14} /> Auth Settings
-                </button>
-                {collections.length > 1 && (
-                  <div className="relative">
-                    <button
-                      className="w-full px-3 py-2 text-left text-sm hover:bg-fetchy-border flex items-center gap-2 justify-between"
-                      onClick={() => setShowMoveToMenu(!showMoveToMenu)}
-                    >
-                      <span className="flex items-center gap-2">
-                        <MoveRight size={14} /> Move to
-                      </span>
-                      <ChevronRight size={14} />
-                    </button>
-                    {showMoveToMenu && (
-                      <div className="absolute left-full top-0 ml-1 bg-fetchy-dropdown border border-fetchy-border rounded-lg shadow-xl py-1 min-w-[160px] z-50">
-                        {collections
-                          .filter(c => c.id !== contextMenu.collectionId)
-                          .map(targetCollection => (
-                            <button
-                              key={targetCollection.id}
-                              className="w-full px-3 py-2 text-left text-sm hover:bg-fetchy-border flex items-center gap-2"
-                              onClick={() => {
-                                moveFolder(
-                                  contextMenu.collectionId,
-                                  targetCollection.id,
-                                  contextMenu.folderId!
-                                );
-                                closeContextMenu();
-                              }}
-                            >
-                              <Folder size={14} className="text-yellow-400" />
-                              <span className="truncate">{targetCollection.name}</span>
-                            </button>
-                          ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-                <hr className="my-1 border-fetchy-border" />
-                <button
-                  className="w-full px-3 py-2 text-left text-sm hover:bg-fetchy-border flex items-center gap-2 text-red-400"
-                  onClick={() => {
-                    deleteFolder(contextMenu.collectionId, contextMenu.folderId!);
-                    closeContextMenu();
-                  }}
-                >
-                  <Trash2 size={14} /> Delete
-                </button>
-              </>
-            )}
-            {contextMenu.type === 'request' && (() => {
-              const collection = collections.find(c => c.id === contextMenu.collectionId);
-              if (!collection) return null;
-
-              const findParent = (
-                folders: RequestFolder[],
-                folderId: string | undefined
-              ): { requests: ApiRequest[] } | null => {
-                if (!folderId) return collection;
-                for (const folder of folders) {
-                  if (folder.id === folderId) return folder;
-                  const found = findParent(folder.folders, folderId);
-                  if (found) return found;
-                }
-                return null;
-              };
-
-              const parent = findParent(collection.folders, contextMenu.folderId);
-              if (!parent) return null;
-
-              const requestIndex = parent.requests.findIndex(r => r.id === contextMenu.requestId);
-              if (requestIndex === -1) return null;
-
-              const canMoveUp = requestIndex > 0;
-              const canMoveDown = requestIndex < parent.requests.length - 1;
-
-              return (
-                <>
-                  {canMoveUp && (
-                    <button
-                      className="w-full px-3 py-2 text-left text-sm hover:bg-fetchy-border flex items-center gap-2"
-                      onClick={() => {
-                        setSortOption('created');
-                        reorderRequests(contextMenu.collectionId, contextMenu.folderId || null, requestIndex, requestIndex - 1);
-                        closeContextMenu();
-                      }}
-                    >
-                      <ChevronUp size={14} /> Move Up
-                    </button>
-                  )}
-                  {canMoveDown && (
-                    <button
-                      className="w-full px-3 py-2 text-left text-sm hover:bg-fetchy-border flex items-center gap-2"
-                      onClick={() => {
-                        setSortOption('created');
-                        reorderRequests(contextMenu.collectionId, contextMenu.folderId || null, requestIndex, requestIndex + 1);
-                        closeContextMenu();
-                      }}
-                    >
-                      <ChevronDown size={14} /> Move Down
-                    </button>
-                  )}
-                  {(canMoveUp || canMoveDown) && <hr className="my-1 border-fetchy-border" />}
-                  <button
-                    className="w-full px-3 py-2 text-left text-sm hover:bg-fetchy-border flex items-center gap-2"
-                    onClick={() => {
-                      duplicateRequest(contextMenu.collectionId, contextMenu.requestId!);
-                      closeContextMenu();
-                    }}
-                  >
-                    <Copy size={14} /> Duplicate
-                  </button>
-                  <button
-                    className="w-full px-3 py-2 text-left text-sm hover:bg-fetchy-border flex items-center gap-2"
-                    onClick={() => {
-                      // Find the request to edit
-                      const collection = collections.find(c => c.id === contextMenu.collectionId);
-                      if (collection) {
-                        const findRequest = (folders: typeof collection.folders, requests: typeof collection.requests): ApiRequest | null => {
-                          // Check in root requests
-                          const request = requests.find(r => r.id === contextMenu.requestId);
-                          if (request) return request;
-
-                          // Check in folders
-                          for (const folder of folders) {
-                            const folderRequest = findRequest(folder.folders, folder.requests);
-                            if (folderRequest) return folderRequest;
-                          }
-                          return null;
-                        };
-
-                        const request = findRequest(collection.folders, collection.requests);
-                        if (request) {
-                          setEditingId(request.id);
-                          setEditingName(request.name);
-                          closeContextMenu();
-                          setTimeout(() => inputRef.current?.focus(), 0);
-                        }
-                      }
-                    }}
-                  >
-                    <Edit2 size={14} /> Rename
-                  </button>
-                  {collections.length > 1 && (
-                    <div className="relative">
-                      <button
-                        className="w-full px-3 py-2 text-left text-sm hover:bg-fetchy-border flex items-center gap-2 justify-between"
-                        onClick={() => setShowMoveToMenu(!showMoveToMenu)}
-                      >
-                        <span className="flex items-center gap-2">
-                          <MoveRight size={14} /> Move to
-                        </span>
-                        <ChevronRight size={14} />
-                      </button>
-                      {showMoveToMenu && (
-                        <div className="absolute left-full top-0 ml-1 bg-fetchy-dropdown border border-fetchy-border rounded-lg shadow-xl py-1 min-w-[160px] z-50">
-                          {collections
-                            .filter(c => c.id !== contextMenu.collectionId)
-                            .map(targetCollection => (
-                              <button
-                                key={targetCollection.id}
-                                className="w-full px-3 py-2 text-left text-sm hover:bg-fetchy-border flex items-center gap-2"
-                                onClick={() => {
-                                  moveRequest(
-                                    contextMenu.collectionId,
-                                    contextMenu.folderId || null,
-                                    targetCollection.id,
-                                    null,
-                                    contextMenu.requestId!
-                                  );
-                                  closeContextMenu();
-                                }}
-                              >
-                                <Folder size={14} className="text-yellow-400" />
-                                <span className="truncate">{targetCollection.name}</span>
-                              </button>
-                            ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  <hr className="my-1 border-fetchy-border" />
-                  <button
-                    className="w-full px-3 py-2 text-left text-sm hover:bg-fetchy-border flex items-center gap-2 text-red-400"
-                    onClick={() => {
-                      deleteRequest(contextMenu.collectionId, contextMenu.requestId!);
-                      closeContextMenu();
-                    }}
-                  >
-                    <Trash2 size={14} /> Delete
-                  </button>
-                </>
-              );
-            })()}
-          </div>
-        </>
+        <SidebarContextMenu
+          contextMenu={contextMenu}
+          closeContextMenu={closeContextMenu}
+          showMoveToMenu={showMoveToMenu}
+          setShowMoveToMenu={setShowMoveToMenu}
+          setRunCollectionModal={setRunCollectionModal}
+          setAuthModal={setAuthModal}
+          setEditingId={setEditingId}
+          setEditingName={setEditingName}
+          inputRef={inputRef}
+          setSortOption={setSortOption}
+        />
       )}
 
       {/* Auth Settings Modal */}

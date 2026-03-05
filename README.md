@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.5.25-blue.svg" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.5.32-blue.svg" alt="Version">
   <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg" alt="Platform">
   <img src="https://img.shields.io/badge/electron-powered-9feaf9.svg" alt="Electron">
@@ -157,7 +157,7 @@ Variables in the request are resolved before generating the snippet.
 
 ### 🎨 Themes & Customization
 
-- **9 Built-in Themes** - Dark, Light, Ocean, Forest, Earth, Aurora, Sunset, Candy, Rainbow
+- **9 Built-in Themes** - Dark, Light, Ocean, Forest, Earth, Aurora, Flame, Candy, Rainbow
 - **Custom Themes** - Create fully custom themes by defining your own color palette (background, sidebar, card, text, border, accent, and more)
 - **Edit & Delete Custom Themes** - Manage your saved custom themes at any time
 - **Panel Layout** - Switch the response panel between a side-by-side (horizontal) and top-bottom (vertical) layout
