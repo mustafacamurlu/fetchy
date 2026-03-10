@@ -1,5 +1,5 @@
-import { useState, useMemo } from 'react';
-import { Send, ArrowDown, Copy, Check, Download, FileImage } from 'lucide-react';
+import { useState, useMemo, useEffect } from 'react';
+import { Send, ArrowDown, Copy, Check, Download, FileImage, Braces } from 'lucide-react';
 import { ApiResponse, ApiRequest } from '../types';
 import { formatBytes, formatTime, getStatusColor, prettyPrintJson, getMethodBgColor } from '../utils/helpers';
 import CodeEditor from './CodeEditor';
@@ -15,6 +15,32 @@ interface ResponsePanelProps {
 export default function ResponsePanel({ response, sentRequest, isLoading }: ResponsePanelProps) {
   const [activeTab, setActiveTab] = useState<'response-body' | 'response-headers' | 'request-headers' | 'request-body' | 'console'>('response-body');
   const [copied, setCopied] = useState(false);
+  const [manualPrettyPrint, setManualPrettyPrint] = useState(false);
+
+  // Reset pretty-print state on new response
+  useEffect(() => {
+    setManualPrettyPrint(false);
+  }, [response]);
+
+  // Detect if body is valid JSON but content-type is not application/json (JSONViewer handles that)
+  const isJsonBody = useMemo(() => {
+    if (!response || response.bodyEncoding === 'base64') return false;
+    if (response.headers['content-type']?.includes('application/json')) return false;
+    try {
+      JSON.parse(response.body);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [response]);
+
+  // Detect if body is already pretty-printed
+  const isAlreadyPretty = useMemo(() => {
+    if (!response || !isJsonBody) return true;
+    return response.body === prettyPrintJson(response.body);
+  }, [response, isJsonBody]);
+
+  const showPrettyPrintButton = isJsonBody && !isAlreadyPretty && !manualPrettyPrint;
 
   // Binary response detection (#23)
   const isBinary = response?.bodyEncoding === 'base64';
@@ -266,13 +292,24 @@ export default function ResponsePanel({ response, sentRequest, isLoading }: Resp
       <div className="flex-1 overflow-hidden">
         {activeTab === 'response-body' && (
           <div className="relative h-full flex flex-col">
-            <button
-              onClick={handleCopyBody}
-              className="absolute top-2 right-4 z-10 p-1.5 rounded bg-fetchy-card/80 hover:bg-fetchy-border text-fetchy-text-muted hover:text-fetchy-text transition-colors"
-              title="Copy to clipboard"
-            >
-              {copied ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
-            </button>
+            <div className="absolute top-2 right-4 z-10 flex items-center gap-1">
+              {showPrettyPrintButton && (
+                <button
+                  onClick={() => setManualPrettyPrint(true)}
+                  className="p-1.5 rounded bg-fetchy-card/80 hover:bg-fetchy-border text-fetchy-text-muted hover:text-fetchy-text transition-colors"
+                  title="Pretty print JSON"
+                >
+                  <Braces size={14} />
+                </button>
+              )}
+              <button
+                onClick={handleCopyBody}
+                className="p-1.5 rounded bg-fetchy-card/80 hover:bg-fetchy-border text-fetchy-text-muted hover:text-fetchy-text transition-colors"
+                title="Copy to clipboard"
+              >
+                {copied ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
+              </button>
+            </div>
             {response.bodyTruncated && (
               <div className="flex items-center gap-2 px-4 py-2 bg-yellow-500/10 border-b border-yellow-500/30 text-yellow-400 text-xs shrink-0">
                 <span>
@@ -327,7 +364,7 @@ export default function ResponsePanel({ response, sentRequest, isLoading }: Resp
               <JSONViewer data={response.body} />
             ) : (
               <CodeEditor
-                value={formattedBody}
+                value={manualPrettyPrint ? prettyPrintJson(response.body) : formattedBody}
                 onChange={() => {}}
                 language="json"
                 readOnly
