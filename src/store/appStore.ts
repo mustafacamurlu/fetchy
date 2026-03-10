@@ -97,6 +97,7 @@ interface AppStore {
   importEnvironment: (environment: Environment) => Environment;
   reorderEnvironments: (fromIndex: number, toIndex: number) => void;
   reorderEnvironmentVariables: (environmentId: string, fromIndex: number, toIndex: number) => void;
+  bulkUpdateEnvironments: (environments: Environment[], activeEnvId: string | null) => void;
 
   // Tabs
   tabs: TabState[];
@@ -895,6 +896,13 @@ export const useAppStore = create<AppStore>()(
 
           const [removed] = state.environments[envIndex].variables.splice(fromIndex, 1);
           state.environments[envIndex].variables.splice(toIndex, 0, removed);
+        });
+      },
+
+      bulkUpdateEnvironments: (environments: Environment[], activeEnvId: string | null) => {
+        set(state => {
+          state.environments = environments;
+          state.activeEnvironmentId = activeEnvId;
         });
       },
 

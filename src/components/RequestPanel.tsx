@@ -515,18 +515,18 @@ export default function RequestPanel({ setResponse, setSentRequest, setIsLoading
           {([
             { id: 'params', label: 'Params', count: request.params.filter(p => p.enabled).length },
             { id: 'headers', label: 'Headers', count: request.headers.filter(h => h.enabled).length },
-            { id: 'body', label: 'Body' },
+            { id: 'body', label: 'Body', hasContent: request.body.type !== 'none' },
             { id: 'auth', label: 'Auth' },
-            { id: 'preScript', label: 'Pre-Script' },
-            { id: 'script', label: 'Post-Script', status: activeTab?.scriptExecutionStatus },
+            { id: 'preScript', label: 'Pre-Script', hasContent: !!(request.preScript?.trim()) },
+            { id: 'script', label: 'Post-Script', hasContent: !!(request.script?.trim()), status: activeTab?.scriptExecutionStatus },
           ]).map((section) => (
             <button
               key={section.id}
               onClick={() => setActiveSection(section.id as any)}
               className={`relative px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
                 activeSection === section.id
-                  ? 'border-fetchy-accent text-fetchy-accent'
-                  : 'border-transparent text-fetchy-text-muted hover:text-fetchy-text'
+                  ? 'border-fetchy-accent text-fetchy-accent bg-fetchy-accent/25'
+                  : 'border-transparent text-fetchy-text-muted hover:text-fetchy-text hover:bg-fetchy-border/50'
               }`}
             >
               {section.label}
@@ -535,11 +535,13 @@ export default function RequestPanel({ setResponse, setSentRequest, setIsLoading
                   {section.count}
                 </span>
               )}
-              {section.status && section.status !== 'none' && (
+              {section.status && section.status !== 'none' ? (
                 <span className={`absolute top-1 right-1 w-2 h-2 rounded-full ${
                   section.status === 'success' ? 'bg-green-500' : 'bg-red-500'
                 }`}></span>
-              )}
+              ) : section.hasContent ? (
+                <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-fetchy-accent/60"></span>
+              ) : null}
             </button>
           ))}
         </div>

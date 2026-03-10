@@ -279,7 +279,7 @@ body.black-theme {
   --accent: #6066b0;
   --accent-hover: #505098;
   --tab-bar-bg: #171717;
-  --tab-active-bg: #161616;
+  --tab-active-bg: #2a2a2a;
   --dropdown-bg: #1a1a1a;
   --modal-bg: #1c1c1c;
   --tooltip-bg: #1a1a1a;
@@ -507,12 +507,10 @@ body.black-theme {
     color: var(--success);
   }
 
-  /* Variable Status Colors */
+  /* Variable Status Colors — use CSS theme variables so all themes are respected */
   .var-defined {
-    @apply bg-green-500/20 text-green-400;
-  }
-  body.light-theme .var-defined {
-    @apply bg-green-700/20 text-green-800;
+    background-color: color-mix(in srgb, var(--success) 15%, transparent);
+    color: var(--success);
   }
 
   .var-secret {
@@ -522,18 +520,20 @@ body.black-theme {
     @apply bg-orange-600/20 text-orange-700;
   }
 
-  .var-undefined {
-    @apply bg-yellow-500/20 text-yellow-400;
+  /* Empty: variable exists in env but has no value (caution) */
+  .var-empty {
+    background-color: color-mix(in srgb, var(--warning) 15%, transparent);
+    color: var(--warning);
   }
-  body.light-theme .var-undefined {
-    @apply bg-yellow-600/20 text-yellow-700;
+
+  /* Undefined: variable not found in env at all (error) */
+  .var-undefined {
+    background-color: color-mix(in srgb, var(--error) 18%, transparent);
+    color: var(--error);
   }
 
   .var-highlight-defined {
-    @apply text-green-400;
-  }
-  body.light-theme .var-highlight-defined {
-    @apply text-green-700;
+    color: var(--success);
   }
 
   .var-highlight-secret {
@@ -543,11 +543,22 @@ body.black-theme {
     @apply text-orange-700;
   }
 
-  .var-highlight-undefined {
-    @apply text-yellow-400;
+  /* Empty variable highlight — warning color + wavy underline for quick visual scan */
+  .var-highlight-empty {
+    color: var(--warning);
+    text-decoration-line: underline;
+    text-decoration-style: wavy;
+    text-decoration-color: color-mix(in srgb, var(--warning) 55%, transparent);
+    text-underline-offset: 2px;
   }
-  body.light-theme .var-highlight-undefined {
-    @apply text-yellow-700;
+
+  /* Undefined variable highlight — error color + wavy underline, clearly alarming */
+  .var-highlight-undefined {
+    color: var(--error);
+    text-decoration-line: underline;
+    text-decoration-style: wavy;
+    text-decoration-color: color-mix(in srgb, var(--error) 55%, transparent);
+    text-underline-offset: 2px;
   }
 
   /* JSON Viewer Syntax Highlighting Colors */

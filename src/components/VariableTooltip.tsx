@@ -27,6 +27,8 @@ export default function VariableTooltip({ variableName, position, onClose }: Var
   const isSecretVar = variable?.isSecret || false;
   // Get effective value: currentValue takes priority, then value, then initialValue
   const value = variable?.currentValue || variable?.value || variable?.initialValue || '';
+  // Empty: variable exists in the environment but carries no value
+  const isEmpty = isDefined && !value;
 
   useEffect(() => {
     if (isEditing && inputRef.current) {
@@ -110,10 +112,26 @@ export default function VariableTooltip({ variableName, position, onClose }: Var
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 bg-fetchy-card border-b border-fetchy-border">
         <div className="flex items-center gap-2">
-          <span className={`font-mono text-sm ${isSecretVar ? 'text-orange-400' : 'text-purple-400'}`}>{`<<${variableName}>>`}</span>
+          <span
+            className={`font-mono text-sm ${
+              isSecretVar
+                ? 'var-highlight-secret'
+                : !isDefined
+                ? 'var-highlight-undefined'
+                : isEmpty
+                ? 'var-highlight-empty'
+                : 'var-highlight-defined'
+            }`}
+          >
+            {`<<${variableName}>>`}
+          </span>
           {isDefined ? (
             <>
-              <span className="text-xs px-1.5 py-0.5 var-defined rounded">defined</span>
+              {isEmpty ? (
+                <span className="text-xs px-1.5 py-0.5 var-empty rounded">empty</span>
+              ) : (
+                <span className="text-xs px-1.5 py-0.5 var-defined rounded">defined</span>
+              )}
               {isSecretVar && (
                 <span className="text-xs px-1.5 py-0.5 var-secret rounded flex items-center gap-1">
                   <Lock size={10} /> secret

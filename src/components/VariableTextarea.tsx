@@ -12,9 +12,87 @@ interface VariableTextareaProps {
 
 export default function VariableTextarea({ value, onChange, placeholder, className }: VariableTextareaProps) {
   const [tooltip, setTooltip] = useState<{ variableName: string; position: { x: number; y: number } } | null>(null);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [suggestionIndex, setSuggestionIndex] = useState(0);
+  const [suggestionPos, setSuggestionPos] = useState<{ x: number; y: number } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
-  const { getActiveEnvironment } = useAppStore();
+  const { getActiveEnvironment, collections, tabs, activeTabId } = useAppStore();
+
+  const activeTab = tabs.find(t => t.id === activeTabId);
+  const activeCollection = activeTab?.collectionId
+    ? collections.find(c => c.id === activeTab.collectionId)
+    : null;
+
+  const computeSuggestions = useCallback((val: string, cursorPos: number) => {
+    const textBefore = val.substring(0, cursorPos);
+    const lastOpenIdx = textBefore.lastIndexOf('<<');
+    if (lastOpenIdx === -1) {
+      setSuggestions([]);
+      setSuggestionPos(null);
+      return;
+    }
+    const betweenText = textBefore.substring(lastOpenIdx + 2);
+    if (betweenText.includes('>')) {
+      setSuggestions([]);
+      setSuggestionPos(null);
+      return;
+    }
+    const partial = betweenText.toLowerCase();
+    const envVars = getActiveEnvironment()?.variables.filter(v => v.enabled && v.key) ?? [];
+    const colVars = activeCollection?.variables?.filter(v => v.enabled && v.key) ?? [];
+    const envKeys = new Set(envVars.map(v => v.key));
+    const allVars = [...envVars, ...colVars.filter(v => !envKeys.has(v.key))];
+    const filtered = allVars
+      .filter(v => v.key.toLowerCase().includes(partial))
+      .map(v => v.key);
+    setSuggestions(filtered);
+    setSuggestionIndex(0);
+    if (filtered.length > 0 && textareaRef.current) {
+      const el = textareaRef.current;
+      const rect = el.getBoundingClientRect();
+      const computed = getComputedStyle(el);
+      const font = `${computed.fontSize} ${computed.fontFamily}`;
+      const paddingLeft = parseFloat(computed.paddingLeft);
+      const paddingTop = parseFloat(computed.paddingTop);
+      const lineHeight = parseFloat(computed.lineHeight) || parseFloat(computed.fontSize) * 1.5;
+      const textBeforeOpen = val.substring(0, lastOpenIdx);
+      const lines = textBeforeOpen.split('\n');
+      const lineIndex = lines.length - 1;
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      let textWidth = 0;
+      if (ctx) {
+        ctx.font = font;
+        textWidth = ctx.measureText(lines[lineIndex]).width;
+      }
+      const x = rect.left + paddingLeft + textWidth - el.scrollLeft;
+      const y = rect.top + paddingTop + (lineIndex + 1) * lineHeight - el.scrollTop;
+      setSuggestionPos({ x, y });
+    } else {
+      setSuggestionPos(null);
+    }
+  }, [getActiveEnvironment, activeCollection]);
+
+  const acceptSuggestion = useCallback((varName: string) => {
+    if (!textareaRef.current) return;
+    const cursorPos = textareaRef.current.selectionStart ?? value.length;
+    const textBefore = value.substring(0, cursorPos);
+    const lastOpenIdx = textBefore.lastIndexOf('<<');
+    if (lastOpenIdx === -1) return;
+    const newValue = value.substring(0, lastOpenIdx) + `<<${varName}>>` + value.substring(cursorPos);
+    onChange(newValue);
+    setSuggestions([]);
+    setSuggestionPos(null);
+    const newCursorPos = lastOpenIdx + varName.length + 4;
+    setTimeout(() => {
+      if (textareaRef.current) {
+        textareaRef.current.selectionStart = newCursorPos;
+        textareaRef.current.selectionEnd = newCursorPos;
+        textareaRef.current.focus();
+      }
+    }, 0);
+  }, [value, onChange]);
 
   // Find variable at cursor position or clicked position
   const findVariableAtPosition = useCallback((text: string, cursorPos: number): string | null => {
@@ -63,6 +141,29 @@ export default function VariableTextarea({ value, onChange, placeholder, classNa
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (suggestions.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSuggestionIndex(i => (i + 1) % suggestions.length);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSuggestionIndex(i => (i - 1 + suggestions.length) % suggestions.length);
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        acceptSuggestion(suggestions[suggestionIndex]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        setSuggestions([]);
+        setSuggestionPos(null);
+        e.stopPropagation();
+        return;
+      }
+    }
     // Close tooltip on Escape
     if (e.key === 'Escape' && tooltip) {
       setTooltip(null);
@@ -115,16 +216,26 @@ export default function VariableTextarea({ value, onChange, placeholder, classNa
         );
       }
 
-      // Check if variable is defined and if it's secret
+      // Check if variable is defined and whether it has a value
       const varName = match[1].trim();
       const variable = activeEnvironment?.variables.find(v => v.key === varName && v.enabled);
       const isDefined = !!variable;
       const isSecret = variable?.isSecret || false;
+      const varValue = variable?.currentValue || variable?.value || variable?.initialValue || '';
+      const isEmpty = isDefined && !varValue;
+
+      const varClass = !isDefined
+        ? 'var-highlight-undefined'
+        : isEmpty
+        ? 'var-highlight-empty'
+        : isSecret
+        ? 'var-highlight-secret'
+        : 'var-highlight-defined';
 
       parts.push(
         <span
           key={`var-${keyIndex++}`}
-          className={`whitespace-pre ${isDefined ? (isSecret ? 'var-highlight-secret' : 'var-highlight-defined') : 'var-highlight-undefined'}`}
+          className={`whitespace-pre ${varClass}`}
         >
           {match[0]}
         </span>
@@ -153,7 +264,17 @@ export default function VariableTextarea({ value, onChange, placeholder, classNa
       <textarea
         ref={textareaRef}
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => {
+          onChange(e.target.value);
+          const cursor = e.target.selectionStart ?? e.target.value.length;
+          computeSuggestions(e.target.value, cursor);
+        }}
+        onBlur={() => {
+          setTimeout(() => {
+            setSuggestions([]);
+            setSuggestionPos(null);
+          }, 150);
+        }}
         onClick={handleClick}
         onKeyDown={handleKeyDown}
         onScroll={handleScroll}
@@ -183,6 +304,37 @@ export default function VariableTextarea({ value, onChange, placeholder, classNa
           position={tooltip.position}
           onClose={() => setTooltip(null)}
         />,
+        document.body
+      )}
+
+      {/* Variable suggestions dropdown */}
+      {suggestionPos && suggestions.length > 0 && createPortal(
+        <div
+          className="fixed z-[9999] bg-fetchy-card border border-fetchy-border rounded-lg shadow-xl overflow-auto"
+          style={{
+            top: suggestionPos.y + 4,
+            left: Math.min(suggestionPos.x, window.innerWidth - 200),
+            maxHeight: '200px',
+            minWidth: '160px',
+          }}
+        >
+          {suggestions.map((name, i) => (
+            <div
+              key={name}
+              className={`px-3 py-1.5 text-sm cursor-pointer font-mono ${
+                i === suggestionIndex
+                  ? 'bg-fetchy-accent/20 text-fetchy-accent'
+                  : 'text-fetchy-text hover:bg-fetchy-hover'
+              }`}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                acceptSuggestion(name);
+              }}
+            >
+              <span className="opacity-50">{`<<`}</span>{name}<span className="opacity-50">{`>>`}</span>
+            </div>
+          ))}
+        </div>,
         document.body
       )}
     </div>

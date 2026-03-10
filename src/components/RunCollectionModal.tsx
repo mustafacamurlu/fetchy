@@ -122,8 +122,6 @@ export default function RunCollectionModal({ isOpen, onClose, collectionId }: Ru
     setShowConfig(false);
     abortControllerRef.current = new AbortController();
 
-    const environment = getActiveEnvironment();
-    const environmentVariables = environment?.variables || [];
     const collectionVariables = collection.variables || [];
 
     for (let iteration = 0; iteration < config.iterations; iteration++) {
@@ -159,6 +157,9 @@ export default function RunCollectionModal({ isOpen, onClose, collectionId }: Ru
           const startTime = performance.now();
 
           try {
+            // Re-fetch environment variables before each request so that variables
+            // set by a previous request's post-script are visible to subsequent scripts.
+            const environmentVariables = getActiveEnvironment()?.variables || [];
             const response = await executeRequest({
               request,
               collectionVariables,
@@ -247,6 +248,9 @@ export default function RunCollectionModal({ isOpen, onClose, collectionId }: Ru
         const promises = allRequests.map(({ request, folderId }, index) => {
           return runWithLimit(async () => {
             const inheritedAuth = getInheritedAuth(collection, folderId);
+            // Snapshot the environment at execution time so each request uses
+            // the latest values (including any set by prior sequential scripts).
+            const environmentVariables = getActiveEnvironment()?.variables || [];
             const startTime = performance.now();
 
             try {

@@ -436,6 +436,38 @@ self.onmessage = function (e) {
     fetchy.response = fetchyData.response;
   }
 
+  // pm compatibility shim — allows Postman-style scripts to work without changes.
+  // pm.environment / pm.variables / pm.globals / pm.collectionVariables all map
+  // to fetchy.environment.  pm.response wraps fetchy.response.
+  var pm = {
+    environment: fetchy.environment,
+    variables: fetchy.environment,
+    globals: fetchy.environment,
+    collectionVariables: fetchy.environment,
+    response: {
+      json: function () { return fetchy.response ? fetchy.response.data : null; },
+      text: function () {
+        if (!fetchy.response) return '';
+        var d = fetchy.response.data;
+        return typeof d === 'string' ? d : JSON.stringify(d);
+      },
+      code: fetchy.response ? fetchy.response.status : 0,
+      status: fetchy.response ? fetchy.response.status : 0,
+      responseTime: 0,
+      headers: {
+        get: function (name) {
+          return (fetchy.response && fetchy.response.headers)
+            ? fetchy.response.headers[name] || null
+            : null;
+        },
+      },
+    },
+    test: function (_name, fn) { try { fn(); } catch (_e) {} },
+    expect: function () {
+      return { to: { equal: function () {}, eql: function () {}, have: { status: function () {} }, be: { ok: function () {}, truthy: function () {}, falsy: function () {} } } };
+    },
+  };
+
   var _console = {
     log: function () {
       var parts = [];
@@ -511,9 +543,17 @@ const runScriptInWorker = (
       resolve({ error: err.message || 'Script execution failed' });
     };
 
-    // Build the serialisable payload for the worker
+    // Build the serialisable payload for the worker.
+    // Use effective value (currentValue > value > initialValue) so that
+    // variables set by previous scripts are visible inside the worker.
     const fetchyData: Record<string, unknown> = {
-      environment: environment.map(v => ({ key: v.key, value: v.value, enabled: v.enabled })),
+      environment: environment.map(v => ({
+        key: v.key,
+        value: (v.currentValue !== undefined && v.currentValue !== '')
+          ? v.currentValue
+          : (v.value || v.initialValue || ''),
+        enabled: v.enabled,
+      })),
     };
 
     if (scriptType === 'post' && response) {
@@ -562,7 +602,10 @@ const applyEnvUpdates = (envUpdates?: Array<{ key: string; value: string }>) => 
     } else {
       // New variable created by script – only currentValue is set.
       // On next app load it will be removed because it has no initialValue/value.
-      variables.push({ id: '', key, value: '', currentValue: value, enabled: true, _fromScript: true } as any);
+      const newId = typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `script-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      variables.push({ id: newId, key, value: '', currentValue: value, enabled: true, _fromScript: true } as any);
     }
   }
   updateEnvironment(activeEnvironment.id, { variables });

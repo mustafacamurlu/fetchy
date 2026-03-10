@@ -1,9 +1,12 @@
+import { useState, useCallback, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { Plus, Trash2 } from 'lucide-react';
 import { KeyValue, RequestBody } from '../../types';
 import { v4 as uuidv4 } from 'uuid';
 import VariableInput from '../VariableInput';
 import VariableTextarea from '../VariableTextarea';
-import CodeEditor from '../CodeEditor';
+import CodeEditor, { CodeEditorHandle } from '../CodeEditor';
+import { useAppStore } from '../../store/appStore';
 
 const BODY_TYPES = [
   { value: 'none', label: 'None' },
@@ -19,6 +22,83 @@ interface BodyEditorProps {
 }
 
 export default function BodyEditor({ body, onChange }: BodyEditorProps) {
+  const { getActiveEnvironment, collections, tabs, activeTabId } = useAppStore();
+
+  const activeTab = tabs.find(t => t.id === activeTabId);
+  const activeCollection = activeTab?.collectionId
+    ? collections.find(c => c.id === activeTab.collectionId)
+    : null;
+
+  // Build a variable-name → status map from env + collection variables
+  const variableStatuses = useMemo(() => {
+    const envVars = getActiveEnvironment()?.variables.filter(v => v.enabled && v.key) ?? [];
+    const colVars = activeCollection?.variables?.filter(v => v.enabled && v.key) ?? [];
+    const result: Record<string, 'defined' | 'empty' | 'secret' | 'undefined'> = {};
+    for (const v of colVars) {
+      const val = v.currentValue || v.value || v.initialValue || '';
+      result[v.key] = v.isSecret ? 'secret' : val ? 'defined' : 'empty';
+    }
+    for (const v of envVars) {
+      const val = v.currentValue || v.value || v.initialValue || '';
+      result[v.key] = v.isSecret ? 'secret' : val ? 'defined' : 'empty';
+    }
+    return result;
+  }, [getActiveEnvironment, activeCollection]);
+
+  const allVariableKeys = useMemo(() => Object.keys(variableStatuses), [variableStatuses]);
+
+  // Suggestion dropdown state
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [suggestionIndex, setSuggestionIndex] = useState(0);
+  const [suggestionPos, setSuggestionPos] = useState<{ x: number; y: number } | null>(null);
+  const lastCursorRef = useRef<{ pos: number; startIdx: number } | null>(null);
+  const codeEditorRef = useRef<CodeEditorHandle>(null);
+
+  const handleCursorActivity = useCallback((value: string, cursorPos: number, coords: { x: number; y: number } | null) => {
+    const textBefore = value.substring(0, cursorPos);
+    const lastOpenIdx = textBefore.lastIndexOf('<<');
+    if (lastOpenIdx === -1) { setSuggestions([]); setSuggestionPos(null); return; }
+    const between = textBefore.substring(lastOpenIdx + 2);
+    if (between.includes('>')) { setSuggestions([]); setSuggestionPos(null); return; }
+    const partial = between.toLowerCase();
+    const filtered = allVariableKeys.filter(k => k.toLowerCase().includes(partial));
+    setSuggestions(filtered);
+    setSuggestionIndex(0);
+    lastCursorRef.current = filtered.length > 0 ? { pos: cursorPos, startIdx: lastOpenIdx } : null;
+    setSuggestionPos(filtered.length > 0 && coords ? coords : null);
+  }, [allVariableKeys]);
+
+  const acceptSuggestion = useCallback((varName: string) => {
+    if (!lastCursorRef.current || !codeEditorRef.current) return;
+    const { pos, startIdx } = lastCursorRef.current;
+    codeEditorRef.current.replaceRange(startIdx, pos, `<<${varName}>>`);
+    setSuggestions([]);
+    setSuggestionPos(null);
+    lastCursorRef.current = null;
+  }, []);
+
+  const handleKeyDownIntercept = useCallback((e: KeyboardEvent): boolean => {
+    if (suggestions.length === 0) return false;
+    if (e.key === 'ArrowDown') {
+      setSuggestionIndex(i => (i + 1) % suggestions.length);
+      return true;
+    }
+    if (e.key === 'ArrowUp') {
+      setSuggestionIndex(i => (i - 1 + suggestions.length) % suggestions.length);
+      return true;
+    }
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      acceptSuggestion(suggestions[suggestionIndex]);
+      return true;
+    }
+    if (e.key === 'Escape') {
+      setSuggestions([]);
+      setSuggestionPos(null);
+      return true;
+    }
+    return false;
+  }, [suggestions, suggestionIndex, acceptSuggestion]);
+
   return (
     <div className="h-full flex flex-col">
       <div className="flex items-center gap-2 p-2 border-b border-fetchy-border">
@@ -45,11 +125,46 @@ export default function BodyEditor({ body, onChange }: BodyEditorProps) {
         )}
 
         {body.type === 'json' && (
-          <CodeEditor
-            value={body.raw || ''}
-            onChange={(value: string) => onChange({ ...body, raw: value })}
-            language="json"
-          />
+          <>
+            <CodeEditor
+              ref={codeEditorRef}
+              value={body.raw || ''}
+              onChange={(value: string) => onChange({ ...body, raw: value })}
+              language="json"
+              variableStatuses={variableStatuses}
+              onCursorActivity={handleCursorActivity}
+              onKeyDownIntercept={handleKeyDownIntercept}
+            />
+            {suggestionPos && suggestions.length > 0 && createPortal(
+              <div
+                className="fixed z-[9999] bg-fetchy-card border border-fetchy-border rounded-lg shadow-xl overflow-auto"
+                style={{
+                  top: suggestionPos.y + 4,
+                  left: Math.min(suggestionPos.x, window.innerWidth - 200),
+                  maxHeight: '200px',
+                  minWidth: '160px',
+                }}
+              >
+                {suggestions.map((name, i) => (
+                  <div
+                    key={name}
+                    className={`px-3 py-1.5 text-sm cursor-pointer font-mono ${
+                      i === suggestionIndex
+                        ? 'bg-fetchy-accent/20 text-fetchy-accent'
+                        : 'text-fetchy-text hover:bg-fetchy-hover'
+                    }`}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      acceptSuggestion(name);
+                    }}
+                  >
+                    <span className="opacity-50">{`<<`}</span>{name}<span className="opacity-50">{`>>`}</span>
+                  </div>
+                ))}
+              </div>,
+              document.body
+            )}
+          </>
         )}
 
         {body.type === 'raw' && (

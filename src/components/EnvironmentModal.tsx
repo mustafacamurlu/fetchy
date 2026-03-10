@@ -262,18 +262,25 @@ export default function EnvironmentModal({ onClose }: EnvironmentModalProps) {
   const {
     environments,
     activeEnvironmentId,
-    addEnvironment,
-    updateEnvironment,
-    deleteEnvironment,
-    setActiveEnvironment,
-    duplicateEnvironment,
-    importEnvironment,
-    reorderEnvironments,
-    reorderEnvironmentVariables,
+    bulkUpdateEnvironments,
   } = useAppStore();
 
+  // ── Draft state (not persisted until Save is clicked) ──────────────────
+  const [draftEnvironments, setDraftEnvironments] = useState<Environment[]>(
+    () => environments.map(e => ({ ...e, variables: [...e.variables] }))
+  );
+  const [draftActiveEnvId, setDraftActiveEnvId] = useState<string | null>(activeEnvironmentId);
+  const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
+
+  const hasUnsavedChanges = useMemo(
+    () =>
+      JSON.stringify(draftEnvironments) !== JSON.stringify(environments) ||
+      draftActiveEnvId !== activeEnvironmentId,
+    [draftEnvironments, draftActiveEnvId, environments, activeEnvironmentId]
+  );
+
   const [selectedEnvId, setSelectedEnvId] = useState<string | null>(
-    activeEnvironmentId || (environments.length > 0 ? environments[0].id : null)
+    activeEnvironmentId || (draftEnvironments.length > 0 ? draftEnvironments[0].id : null)
   );
   const [editingName, setEditingName] = useState<string | null>(null);
   const [newName, setNewName] = useState('');
@@ -289,7 +296,7 @@ export default function EnvironmentModal({ onClose }: EnvironmentModalProps) {
     })
   );
 
-  const selectedEnv = environments.find(e => e.id === selectedEnvId);
+  const selectedEnv = draftEnvironments.find(e => e.id === selectedEnvId);
 
   // Split variables into user-defined and script-created
   const userVariables = useMemo(
@@ -302,17 +309,29 @@ export default function EnvironmentModal({ onClose }: EnvironmentModalProps) {
   );
 
   const handleAddEnvironment = () => {
-    const env = addEnvironment('New Environment');
+    const env: Environment = { id: uuidv4(), name: 'New Environment', variables: [] };
+    setDraftEnvironments(prev => [...prev, env]);
     setSelectedEnvId(env.id);
     setEditingName(env.id);
     setNewName(env.name);
   };
 
   const handleDuplicateEnvironment = (envId: string) => {
-    const duplicated = duplicateEnvironment(envId);
-    if (duplicated) {
-      setSelectedEnvId(duplicated.id);
-    }
+    const original = draftEnvironments.find(e => e.id === envId);
+    if (!original) return;
+    const duplicated: Environment = {
+      id: uuidv4(),
+      name: `${original.name} (Copy)`,
+      variables: original.variables.map(v => ({ ...v, id: uuidv4() })),
+    };
+    setDraftEnvironments(prev => [...prev, duplicated]);
+    setSelectedEnvId(duplicated.id);
+  };
+
+  const updateDraftEnvironment = (id: string, updates: Partial<Environment>) => {
+    setDraftEnvironments(prev =>
+      prev.map(e => (e.id === id ? { ...e, ...updates } : e))
+    );
   };
 
   const handleExportEnvironment = (env: Environment) => {
@@ -364,21 +383,22 @@ export default function EnvironmentModal({ onClose }: EnvironmentModalProps) {
           throw new Error('Invalid environment file format');
         }
 
-        const imported = importEnvironment({
-          id: '', // Will be replaced by importEnvironment
+        const imported: Environment = {
+          id: uuidv4(),
           name: data.name,
           variables: data.variables.map((v: any) => ({
             id: uuidv4(),
             key: v.key || '',
-            value: v.value || '', // For backward compatibility
-            initialValue: v.value || '', // Set initial value from imported value
-            currentValue: '', // Start with empty current value
+            value: v.value || '',
+            initialValue: v.value || '',
+            currentValue: '',
             enabled: v.enabled !== false,
             isSecret: v.isSecret || false,
             description: v.description || '',
           })),
-        });
+        };
 
+        setDraftEnvironments(prev => [...prev, imported]);
         setSelectedEnvId(imported.id);
         setImportSuccess(`Successfully imported "${imported.name}"`);
         setTimeout(() => setImportSuccess(null), 3000);
@@ -401,7 +421,7 @@ export default function EnvironmentModal({ onClose }: EnvironmentModalProps) {
 
   const handleSaveName = (envId: string) => {
     if (newName.trim()) {
-      updateEnvironment(envId, { name: newName.trim() });
+      updateDraftEnvironment(envId, { name: newName.trim() });
     }
     setEditingName(null);
     setNewName('');
@@ -415,16 +435,16 @@ export default function EnvironmentModal({ onClose }: EnvironmentModalProps) {
       value: '',
       initialValue: '',
       currentValue: '',
-      enabled: true
+      enabled: true,
     };
-    updateEnvironment(selectedEnv.id, {
+    updateDraftEnvironment(selectedEnv.id, {
       variables: [...selectedEnv.variables, newVar],
     });
   };
 
   const handleUpdateVariable = (varId: string, updates: Partial<KeyValue>) => {
     if (!selectedEnv) return;
-    updateEnvironment(selectedEnv.id, {
+    updateDraftEnvironment(selectedEnv.id, {
       variables: selectedEnv.variables.map(v =>
         v.id === varId ? { ...v, ...updates } : v
       ),
@@ -433,7 +453,7 @@ export default function EnvironmentModal({ onClose }: EnvironmentModalProps) {
 
   const handleDeleteVariable = (varId: string) => {
     if (!selectedEnv) return;
-    updateEnvironment(selectedEnv.id, {
+    updateDraftEnvironment(selectedEnv.id, {
       variables: selectedEnv.variables.filter(v => v.id !== varId),
     });
   };
@@ -442,10 +462,16 @@ export default function EnvironmentModal({ onClose }: EnvironmentModalProps) {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
 
-    const oldIndex = environments.findIndex(e => e.id === active.id);
-    const newIndex = environments.findIndex(e => e.id === over.id);
+    const oldIndex = draftEnvironments.findIndex(e => e.id === active.id);
+    const newIndex = draftEnvironments.findIndex(e => e.id === over.id);
+    if (oldIndex === -1 || newIndex === -1) return;
 
-    reorderEnvironments(oldIndex, newIndex);
+    setDraftEnvironments(prev => {
+      const next = [...prev];
+      const [removed] = next.splice(oldIndex, 1);
+      next.splice(newIndex, 0, removed);
+      return next;
+    });
   };
 
   const handleDragEndVariables = (event: DragEndEvent) => {
@@ -454,18 +480,35 @@ export default function EnvironmentModal({ onClose }: EnvironmentModalProps) {
 
     const oldIndex = selectedEnv.variables.findIndex(v => v.id === active.id);
     const newIndex = selectedEnv.variables.findIndex(v => v.id === over.id);
+    if (oldIndex === -1 || newIndex === -1) return;
 
-    reorderEnvironmentVariables(selectedEnv.id, oldIndex, newIndex);
+    const newVars = [...selectedEnv.variables];
+    const [removed] = newVars.splice(oldIndex, 1);
+    newVars.splice(newIndex, 0, removed);
+    updateDraftEnvironment(selectedEnv.id, { variables: newVars });
+  };
+
+  const handleSave = () => {
+    bulkUpdateEnvironments(draftEnvironments, draftActiveEnvId);
+    onClose();
+  };
+
+  const handleClose = () => {
+    if (hasUnsavedChanges) {
+      setShowDiscardConfirm(true);
+    } else {
+      onClose();
+    }
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center modal-backdrop">
-      <div className="bg-fetchy-modal border border-fetchy-border rounded-lg shadow-2xl w-full max-w-4xl mx-4 overflow-hidden max-h-[80vh] flex flex-col">
+      <div className="bg-fetchy-modal border border-fetchy-border rounded-lg shadow-2xl w-full max-w-4xl mx-4 overflow-hidden max-h-[80vh] flex flex-col relative">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-fetchy-border shrink-0">
           <h2 className="text-xl font-semibold text-fetchy-text">Environments</h2>
           <button
-            onClick={onClose}
+            onClick={handleClose}
             className="p-1 hover:bg-fetchy-border rounded text-fetchy-text-muted hover:text-fetchy-text"
           >
             <X size={20} />
@@ -514,7 +557,7 @@ export default function EnvironmentModal({ onClose }: EnvironmentModalProps) {
             )}
 
             <div className="flex-1 overflow-y-auto p-2">
-              {environments.length === 0 ? (
+              {draftEnvironments.length === 0 ? (
                 <p className="text-center text-fetchy-text-muted text-sm py-8">
                   No environments yet
                 </p>
@@ -525,15 +568,15 @@ export default function EnvironmentModal({ onClose }: EnvironmentModalProps) {
                   onDragEnd={handleDragEndEnvironments}
                 >
                   <SortableContext
-                    items={environments.map(e => e.id)}
+                    items={draftEnvironments.map(e => e.id)}
                     strategy={verticalListSortingStrategy}
                   >
-                    {environments.map((env) => (
+                    {draftEnvironments.map((env) => (
                       <SortableEnvironmentItem
                         key={env.id}
                         env={env}
                         isSelected={selectedEnvId === env.id}
-                        isActive={activeEnvironmentId === env.id}
+                        isActive={draftActiveEnvId === env.id}
                         isEditing={editingName === env.id}
                         newName={newName}
                         onSelect={() => setSelectedEnvId(env.id)}
@@ -547,9 +590,12 @@ export default function EnvironmentModal({ onClose }: EnvironmentModalProps) {
                         onDuplicate={() => handleDuplicateEnvironment(env.id)}
                         onExport={() => handleExportEnvironment(env)}
                         onDelete={() => {
-                          deleteEnvironment(env.id);
+                          setDraftEnvironments(prev => prev.filter(e => e.id !== env.id));
                           if (selectedEnvId === env.id) {
-                            setSelectedEnvId(environments[0]?.id || null);
+                            setSelectedEnvId(draftEnvironments[0]?.id || null);
+                          }
+                          if (draftActiveEnvId === env.id) {
+                            setDraftActiveEnvId(null);
                           }
                         }}
                       />
@@ -591,9 +637,9 @@ export default function EnvironmentModal({ onClose }: EnvironmentModalProps) {
                       <Download size={14} />
                       Export
                     </button>
-                    {activeEnvironmentId === selectedEnv.id ? (
+                    {draftActiveEnvId === selectedEnv.id ? (
                       <button
-                        onClick={() => setActiveEnvironment(null)}
+                        onClick={() => setDraftActiveEnvId(null)}
                         className="btn btn-secondary text-sm flex items-center gap-2"
                       >
                         <Check size={14} className="text-green-400" />
@@ -601,7 +647,7 @@ export default function EnvironmentModal({ onClose }: EnvironmentModalProps) {
                       </button>
                     ) : (
                       <button
-                        onClick={() => setActiveEnvironment(selectedEnv.id)}
+                        onClick={() => setDraftActiveEnvId(selectedEnv.id)}
                         className="btn btn-primary text-sm"
                       >
                         Set as Active
@@ -771,12 +817,44 @@ export default function EnvironmentModal({ onClose }: EnvironmentModalProps) {
         {/* Footer */}
         <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-fetchy-border bg-fetchy-sidebar shrink-0">
           <button
-            onClick={onClose}
+            onClick={handleClose}
+            className="btn btn-secondary"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
             className="btn btn-primary"
           >
-            Done
+            Save
           </button>
         </div>
+
+        {/* Discard confirmation dialog */}
+        {showDiscardConfirm && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/60 rounded-lg">
+            <div className="bg-fetchy-modal border border-fetchy-border rounded-lg shadow-2xl p-6 mx-4 max-w-sm w-full">
+              <h3 className="text-base font-semibold text-fetchy-text mb-2">Discard changes?</h3>
+              <p className="text-sm text-fetchy-text-muted mb-5">
+                You have unsaved changes. Are you sure you want to close without saving?
+              </p>
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={() => setShowDiscardConfirm(false)}
+                  className="btn btn-secondary"
+                >
+                  Keep Editing
+                </button>
+                <button
+                  onClick={onClose}
+                  className="btn bg-red-600 hover:bg-red-700 text-white"
+                >
+                  Discard
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

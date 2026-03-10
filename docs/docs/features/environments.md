@@ -91,16 +91,20 @@ In addition to environment variables, each collection can have its own variables
 
 ## Using Variables in Scripts
 
-In pre/post-request scripts, read and write environment variables programmatically:
+In pre/post-request scripts, read and write environment variables programmatically using the `fetchy` API:
 
 ```javascript
 // Read a variable
-const token = pm.environment.get("api_token");
+const token = fetchy.environment.get("api_token");
 
 // Write a variable (e.g., after a login request)
-const json = pm.response.json();
-pm.environment.set("access_token", json.token);
+const data = fetchy.response.data;          // already-parsed JSON body
+fetchy.environment.set("access_token", data.token);
 ```
+
+> **Note:** Fetchy uses the `fetchy.*` scripting API. If you are migrating scripts
+> from Postman, `pm.environment.get/set` and `pm.response.json()` are automatically
+> mapped to their `fetchy.*` equivalents at runtime — no changes needed.
 
 ---
 
