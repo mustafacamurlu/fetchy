@@ -203,30 +203,41 @@ export default function GitSettingsTab({ workspace, onWorkspaceUpdate, onOpenCon
     if (!api || !homeDir) return;
     setIsRefreshing(true);
     try {
-      const [statusRes, logRes, mergingRes, branchRes] = await Promise.all([
-        api.gitStatus({ directory: homeDir }),
-        api.gitLog({ directory: homeDir, count: 15 }),
-        api.gitIsMerging({ directory: homeDir }),
-        api.gitListBranches({ directory: homeDir }),
-      ]);
+      // First check git status — only fetch log/branches/conflicts if it's a repo
+      const statusRes = await api.gitStatus({ directory: homeDir });
       setStatus(statusRes);
-      if (logRes.success && logRes.commits) setCommits(logRes.commits);
-      else setCommits([]);
-      if (statusRes.success && statusRes.remoteUrl) {
-        setRemoteUrl(statusRes.remoteUrl);
-      }
-      if (branchRes.success) {
-        setBranches({ local: branchRes.local, remote: branchRes.remote });
-      }
 
-      // Check for merge conflicts
-      setIsMerging(mergingRes.merging);
-      if (mergingRes.merging) {
-        const conflictsRes = await api.gitMergeConflicts({ directory: homeDir });
-        if (conflictsRes.success) {
-          setConflictFiles(conflictsRes.files);
+      if (statusRes.success && statusRes.isRepo) {
+        const [logRes, mergingRes, branchRes] = await Promise.all([
+          api.gitLog({ directory: homeDir, count: 15 }),
+          api.gitIsMerging({ directory: homeDir }),
+          api.gitListBranches({ directory: homeDir }),
+        ]);
+        if (logRes.success && logRes.commits) setCommits(logRes.commits);
+        else setCommits([]);
+        if (statusRes.remoteUrl) {
+          setRemoteUrl(statusRes.remoteUrl);
+        }
+        if (branchRes.success) {
+          setBranches({ local: branchRes.local, remote: branchRes.remote });
+        }
+
+        // Check for merge conflicts
+        setIsMerging(mergingRes.merging);
+        if (mergingRes.merging) {
+          const conflictsRes = await api.gitMergeConflicts({ directory: homeDir });
+          if (conflictsRes.success) {
+            setConflictFiles(conflictsRes.files);
+          }
+        } else {
+          setConflictFiles([]);
+          setResolvedFiles(new Set());
         }
       } else {
+        // Not a repo — reset dependent state
+        setCommits([]);
+        setBranches({ local: [], remote: [] });
+        setIsMerging(false);
         setConflictFiles([]);
         setResolvedFiles(new Set());
       }
