@@ -626,12 +626,32 @@ export default function GitSettingsTab({ workspace, onWorkspaceUpdate, onOpenCon
     );
   }
 
-  // Still loading
+  // Still loading git version
   if (gitAvailable === null) {
     return (
       <div className='flex items-center justify-center py-12'>
         <Loader2 size={20} className='animate-spin text-purple-400' />
         <span className='ml-2 text-sm text-gray-400'>Checking git...</span>
+      </div>
+    );
+  }
+
+  // Workspace directory not configured
+  if (!homeDir) {
+    return (
+      <div className='flex flex-col items-center justify-center py-12 text-gray-500'>
+        <AlertCircle size={32} className='mb-3 opacity-50' />
+        <p className='text-sm'>Workspace directory not configured.</p>
+      </div>
+    );
+  }
+
+  // Status not yet loaded — avoid flashing the init/clone section while fetching
+  if (status === null) {
+    return (
+      <div className='flex items-center justify-center py-12'>
+        <Loader2 size={20} className='animate-spin text-purple-400' />
+        <span className='ml-2 text-sm text-gray-400'>Loading git status...</span>
       </div>
     );
   }
@@ -677,8 +697,8 @@ export default function GitSettingsTab({ workspace, onWorkspaceUpdate, onOpenCon
         </div>
       )}
 
-      {/* Not a repo — show init/clone options */}
-      {!isRepo && (
+      {/* Not a repo — only show when status confirmed it's not a repo */}
+      {status.success === true && !isRepo && (
         <div className='space-y-3'>
           <div className='p-3 bg-[#0f0f1a] rounded border border-[#2d2d44] text-xs text-gray-400 font-mono truncate'>
             {homeDir}
