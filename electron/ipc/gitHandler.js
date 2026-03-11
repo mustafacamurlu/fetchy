@@ -119,11 +119,32 @@ function register(ipcMain, deps) {
       const branchResult = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], directory);
       const branch = branchResult.success ? branchResult.stdout.trim() : 'unknown';
 
-      // Get status (porcelain for machine-readable)
-      const statusResult = await runGit(['status', '--porcelain'], directory);
-      const changes = statusResult.success
-        ? statusResult.stdout.trim().split('\n').filter((l) => l.trim() !== '')
-        : [];
+      // Get status (porcelain with -z for NUL-separated, unambiguous output)
+      const statusResult = await runGit(['status', '--porcelain=v1', '-z'], directory);
+      const changes = [];
+      const changesDetailed = [];
+      if (statusResult.success && statusResult.stdout) {
+        const parts = statusResult.stdout.split('\x00');
+        let i = 0;
+        while (i < parts.length) {
+          const part = parts[i];
+          if (part.length < 3 || part[2] !== ' ') { i++; continue; }
+          const x = part[0];
+          const y = part[1];
+          const filePath = part.substring(3);
+          if ((x === 'R' || x === 'C') && i + 1 < parts.length) {
+            // Rename/copy: current part has orig path, next NUL-separated part has new path
+            i++;
+            const newPath = parts[i];
+            changesDetailed.push({ indexStatus: x, workTreeStatus: y, path: newPath, origPath: filePath });
+            changes.push(`${x}${y} ${filePath} -> ${newPath}`);
+          } else {
+            changesDetailed.push({ indexStatus: x, workTreeStatus: y, path: filePath });
+            changes.push(`${x}${y} ${filePath}`);
+          }
+          i++;
+        }
+      }
 
       // Get remote URL
       const remoteResult = await runGit(['remote', 'get-url', 'origin'], directory);
@@ -160,11 +181,12 @@ function register(ipcMain, deps) {
         isRepo: true,
         branch,
         changes,
+        changesDetailed,
         remoteUrl,
         lastCommit,
         ahead,
         behind,
-        hasChanges: changes.length > 0,
+        hasChanges: changesDetailed.length > 0,
       };
     } catch (error) {
       return { success: false, error: error.message };
@@ -818,6 +840,27 @@ function register(ipcMain, deps) {
       requireDirectoryPath(directory, 'directory');
       requireSafeRelativePath(filepath, 'filepath');
       if (!isGitRepo(directory)) return { success: false, diff: '', error: 'Not a git repository' };
+
+      // Check if file is untracked
+      const checkResult = await runGit(['status', '--porcelain', '--', filepath], directory);
+      const isUntracked = checkResult.success && checkResult.stdout.trim().startsWith('??');
+
+      if (isUntracked) {
+        // For untracked files, git diff returns nothing — use --no-index against /dev/null
+        const noIdxResult = await runGit(['diff', '--no-index', '--', '/dev/null', filepath], directory);
+        // --no-index exits with code 1 when files differ, so stdout may be in either case
+        const diff = noIdxResult.stdout || '';
+        if (diff) return { success: true, diff };
+        // Fallback: read file content directly
+        const fullPath = path.join(directory, filepath);
+        if (fs.existsSync(fullPath)) {
+          const content = fs.readFileSync(fullPath, 'utf-8');
+          const lines = content.split('\n');
+          const header = `diff --git a/${filepath} b/${filepath}\nnew file\n--- /dev/null\n+++ b/${filepath}\n@@ -0,0 +1,${lines.length} @@`;
+          return { success: true, diff: header + '\n' + lines.map(l => '+' + l).join('\n') };
+        }
+        return { success: true, diff: '(new untracked file)' };
+      }
 
       const args = staged
         ? ['diff', '--cached', '--', filepath]

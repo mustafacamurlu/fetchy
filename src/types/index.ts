@@ -407,11 +407,24 @@ export interface GitCommitInfo {
   date: string;
 }
 
+/** Structured representation of a single file change from git status --porcelain */
+export interface GitFileChange {
+  /** File path (for renames/copies, this is the new/destination path) */
+  path: string;
+  /** Original path before rename/copy (only set for R/C status) */
+  origPath?: string;
+  /** Index (staged) status character: M, A, D, R, C, ?, ! or space */
+  indexStatus: string;
+  /** Work-tree (unstaged) status character: M, D, ? or space */
+  workTreeStatus: string;
+}
+
 export interface GitStatusResult {
   success: boolean;
   isRepo?: boolean;
   branch?: string;
   changes?: string[];
+  changesDetailed?: GitFileChange[];
   remoteUrl?: string;
   lastCommit?: GitCommitInfo | null;
   ahead?: number;

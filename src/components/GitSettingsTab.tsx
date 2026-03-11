@@ -40,6 +40,7 @@ import type {
   GitStatusResult,
   GitCommitInfo,
   GitBranchInfo,
+  GitFileChange,
   Workspace,
 } from '../types';
 import { useAppStore } from '../store/appStore';
@@ -56,6 +57,7 @@ type OpStatus = 'idle' | 'loading' | 'success' | 'error';
 /** Separate staged / unstaged views of a single file */
 interface StagedFile {
   path: string;
+  origPath?: string;
   status: 'added' | 'modified' | 'deleted' | 'renamed' | 'copied';
 }
 
@@ -65,28 +67,58 @@ interface UnstagedFile {
 }
 
 /**
- * Parse git status --porcelain output into staged and unstaged file lists.
- * X = index status, Y = worktree status. Format: "XY path"
+ * Parse structured git status data into staged and unstaged file lists.
+ * Uses changesDetailed (structured data from backend) for reliable parsing.
+ * Falls back to raw porcelain string parsing for backward compatibility.
  */
-function parseStatusFiles(changes: string[]): { staged: StagedFile[]; unstaged: UnstagedFile[] } {
+function parseStatusFiles(changesDetailed?: GitFileChange[], changes?: string[]): { staged: StagedFile[]; unstaged: UnstagedFile[] } {
   const staged: StagedFile[] = [];
   const unstaged: UnstagedFile[] = [];
 
-  for (const line of changes) {
+  // Prefer structured data when available
+  if (changesDetailed && changesDetailed.length > 0) {
+    for (const change of changesDetailed) {
+      const { indexStatus: x, workTreeStatus: y, path: filePath, origPath } = change;
+
+      // Staged changes (index status is not space/?)
+      if (x === 'M') staged.push({ path: filePath, status: 'modified' });
+      else if (x === 'A') staged.push({ path: filePath, status: 'added' });
+      else if (x === 'D') staged.push({ path: filePath, status: 'deleted' });
+      else if (x === 'R') staged.push({ path: filePath, status: 'renamed', origPath });
+      else if (x === 'C') staged.push({ path: filePath, status: 'copied', origPath });
+
+      // Unstaged changes (work-tree status is not space)
+      if (y === 'M') unstaged.push({ path: filePath, status: 'modified' });
+      else if (y === 'D') unstaged.push({ path: filePath, status: 'deleted' });
+      else if (x === '?' && y === '?') unstaged.push({ path: filePath, status: 'untracked' });
+    }
+    return { staged, unstaged };
+  }
+
+  // Fallback: parse raw porcelain strings
+  for (const line of (changes ?? [])) {
     if (line.length < 3) continue;
-    const x = line[0]; // index status
-    const y = line[1]; // work-tree status
-    const filePath = line.substring(3).trim();
+    const x = line[0];
+    const y = line[1];
+    let filePath = line.substring(3).trim();
+    let origPath: string | undefined;
     if (!filePath) continue;
 
-    // Staged changes (index status is not space/?)
+    // Handle rename arrow notation: "old_path -> new_path"
+    if ((x === 'R' || x === 'C') && filePath.includes(' -> ')) {
+      const arrowIdx = filePath.indexOf(' -> ');
+      origPath = filePath.substring(0, arrowIdx);
+      filePath = filePath.substring(arrowIdx + 4);
+    }
+
+    // Staged changes
     if (x === 'M') staged.push({ path: filePath, status: 'modified' });
     else if (x === 'A') staged.push({ path: filePath, status: 'added' });
     else if (x === 'D') staged.push({ path: filePath, status: 'deleted' });
-    else if (x === 'R') staged.push({ path: filePath, status: 'renamed' });
-    else if (x === 'C') staged.push({ path: filePath, status: 'copied' });
+    else if (x === 'R') staged.push({ path: filePath, status: 'renamed', origPath });
+    else if (x === 'C') staged.push({ path: filePath, status: 'copied', origPath });
 
-    // Unstaged changes (work-tree status is not space)
+    // Unstaged changes
     if (y === 'M') unstaged.push({ path: filePath, status: 'modified' });
     else if (y === 'D') unstaged.push({ path: filePath, status: 'deleted' });
     else if (x === '?' && y === '?') unstaged.push({ path: filePath, status: 'untracked' });
@@ -163,8 +195,8 @@ export default function GitSettingsTab({ workspace, onWorkspaceUpdate, onOpenCon
 
   // Parse status into staged/unstaged file lists
   const { staged, unstaged } = useMemo(
-    () => parseStatusFiles(status?.changes ?? []),
-    [status?.changes]
+    () => parseStatusFiles(status?.changesDetailed, status?.changes),
+    [status?.changesDetailed, status?.changes]
   );
 
   const clearOpStatus = useCallback(() => {
@@ -208,6 +240,9 @@ export default function GitSettingsTab({ workspace, onWorkspaceUpdate, onOpenCon
   const refreshStatus = useCallback(async () => {
     if (!api || !homeDir) return;
     setIsRefreshing(true);
+    // Clear stale diff viewer on refresh
+    setDiffFile(null);
+    setDiffContent('');
     try {
       // First check git status — only fetch log/branches/conflicts if it's a repo
       const statusRes = await api.gitStatus({ directory: homeDir });
@@ -275,7 +310,7 @@ export default function GitSettingsTab({ workspace, onWorkspaceUpdate, onOpenCon
     const result = await api.gitInit({ directory: homeDir });
     if (result.success) {
       showOp('success', 'Repository initialized');
-      refreshStatus();
+      await refreshStatus();
     } else {
       showOp('error', result.error || 'Failed to initialize');
     }
@@ -290,7 +325,7 @@ export default function GitSettingsTab({ workspace, onWorkspaceUpdate, onOpenCon
       showOp('success', 'Repository cloned successfully');
       setCloneUrl('');
       setShowCloneForm(false);
-      refreshStatus();
+      await refreshStatus();
     } else {
       showOp('error', result.error || 'Clone failed');
     }
@@ -304,7 +339,7 @@ export default function GitSettingsTab({ workspace, onWorkspaceUpdate, onOpenCon
     if (result.success) {
       showOp('success', result.output || 'Pull completed');
       invalidateWriteCache();
-      refreshStatus();
+      await refreshStatus();
       await useAppStore.persist.rehydrate();
     } else {
       const hasMergeConflict = result.mergeConflict === true;
@@ -334,7 +369,7 @@ export default function GitSettingsTab({ workspace, onWorkspaceUpdate, onOpenCon
     const result = await api.gitPush({ directory: homeDir });
     if (result.success) {
       showOp('success', result.output || 'Push completed');
-      refreshStatus();
+      await refreshStatus();
     } else {
       const errorMsg = result.error || '';
       if (errorMsg.includes('rejected') || errorMsg.includes('non-fast-forward') || errorMsg.includes('fetch first')) {
@@ -352,7 +387,7 @@ export default function GitSettingsTab({ workspace, onWorkspaceUpdate, onOpenCon
     const result = await api.gitFetch({ directory: homeDir });
     if (result.success) {
       showOp('success', 'Fetch completed');
-      refreshStatus();
+      await refreshStatus();
     } else {
       showOp('error', result.error || 'Fetch failed');
     }
@@ -363,7 +398,7 @@ export default function GitSettingsTab({ workspace, onWorkspaceUpdate, onOpenCon
     if (!api || !homeDir || files.length === 0) return;
     const result = await api.gitStageFiles({ directory: homeDir, files });
     if (result.success) {
-      refreshStatus();
+      await refreshStatus();
     } else {
       showOp('error', result.error || 'Failed to stage files');
     }
@@ -374,7 +409,7 @@ export default function GitSettingsTab({ workspace, onWorkspaceUpdate, onOpenCon
     if (!api || !homeDir || files.length === 0) return;
     const result = await api.gitUnstageFiles({ directory: homeDir, files });
     if (result.success) {
-      refreshStatus();
+      await refreshStatus();
     } else {
       showOp('error', result.error || 'Failed to unstage files');
     }
@@ -385,7 +420,7 @@ export default function GitSettingsTab({ workspace, onWorkspaceUpdate, onOpenCon
     if (!api || !homeDir || files.length === 0) return;
     const result = await api.gitDiscardFiles({ directory: homeDir, files });
     if (result.success) {
-      refreshStatus();
+      await refreshStatus();
     } else {
       showOp('error', result.error || 'Failed to discard changes');
     }
@@ -395,7 +430,7 @@ export default function GitSettingsTab({ workspace, onWorkspaceUpdate, onOpenCon
   const handleStageAll = useCallback(async () => {
     if (!api || !homeDir) return;
     const result = await api.gitStageFiles({ directory: homeDir, files: unstaged.map(f => f.path) });
-    if (result.success) refreshStatus();
+    if (result.success) await refreshStatus();
     else showOp('error', result.error || 'Failed to stage all');
   }, [api, homeDir, unstaged, showOp, refreshStatus]);
 
@@ -403,7 +438,7 @@ export default function GitSettingsTab({ workspace, onWorkspaceUpdate, onOpenCon
   const handleUnstageAll = useCallback(async () => {
     if (!api || !homeDir) return;
     const result = await api.gitUnstageFiles({ directory: homeDir, files: staged.map(f => f.path) });
-    if (result.success) refreshStatus();
+    if (result.success) await refreshStatus();
     else showOp('error', result.error || 'Failed to unstage all');
   }, [api, homeDir, staged, showOp, refreshStatus]);
 
@@ -416,7 +451,7 @@ export default function GitSettingsTab({ workspace, onWorkspaceUpdate, onOpenCon
     if (result.success) {
       showOp('success', result.output || 'Changes committed');
       setCommitMessage('');
-      refreshStatus();
+      await refreshStatus();
     } else {
       showOp('error', result.error || 'Commit failed');
     }
@@ -431,7 +466,7 @@ export default function GitSettingsTab({ workspace, onWorkspaceUpdate, onOpenCon
     if (result.success) {
       showOp('success', result.output || 'Changes committed');
       setCommitMessage('');
-      refreshStatus();
+      await refreshStatus();
     } else {
       showOp('error', result.error || 'Commit failed');
     }
@@ -446,7 +481,7 @@ export default function GitSettingsTab({ workspace, onWorkspaceUpdate, onOpenCon
     if (result.success) {
       showOp('success', result.output || 'Changes synced');
       setCommitMessage('');
-      refreshStatus();
+      await refreshStatus();
     } else {
       showOp('error', result.error || 'Sync failed');
     }
@@ -460,7 +495,7 @@ export default function GitSettingsTab({ workspace, onWorkspaceUpdate, onOpenCon
     if (result.success) {
       showOp('success', 'Remote URL updated');
       setShowRemoteForm(false);
-      refreshStatus();
+      await refreshStatus();
     } else {
       showOp('error', result.error || 'Failed to set remote');
     }
@@ -474,7 +509,7 @@ export default function GitSettingsTab({ workspace, onWorkspaceUpdate, onOpenCon
     const result = await api.gitCheckoutBranch({ directory: homeDir, branch: branchName });
     if (result.success) {
       showOp('success', `Switched to ${branchName}`);
-      refreshStatus();
+      await refreshStatus();
     } else {
       showOp('error', result.error || 'Failed to switch branch');
     }
@@ -490,7 +525,7 @@ export default function GitSettingsTab({ workspace, onWorkspaceUpdate, onOpenCon
       setNewBranchName('');
       setShowNewBranchForm(false);
       setShowBranchDropdown(false);
-      refreshStatus();
+      await refreshStatus();
     } else {
       showOp('error', result.error || 'Failed to create branch');
     }
@@ -503,7 +538,7 @@ export default function GitSettingsTab({ workspace, onWorkspaceUpdate, onOpenCon
     const result = await api.gitStash({ directory: homeDir });
     if (result.success) {
       showOp('success', result.output || 'Changes stashed');
-      refreshStatus();
+      await refreshStatus();
     } else {
       showOp('error', result.error || 'Stash failed');
     }
@@ -516,7 +551,7 @@ export default function GitSettingsTab({ workspace, onWorkspaceUpdate, onOpenCon
     const result = await api.gitStashPop({ directory: homeDir });
     if (result.success) {
       showOp('success', result.output || 'Stash applied');
-      refreshStatus();
+      await refreshStatus();
     } else {
       showOp('error', result.error || 'Stash pop failed');
     }
@@ -571,7 +606,7 @@ export default function GitSettingsTab({ workspace, onWorkspaceUpdate, onOpenCon
       setConflictFiles([]);
       setResolvedFiles(new Set());
       invalidateWriteCache();
-      refreshStatus();
+      await refreshStatus();
       await useAppStore.persist.rehydrate();
     } else {
       showOp('error', result.error || 'Failed to complete merge');
@@ -589,7 +624,7 @@ export default function GitSettingsTab({ workspace, onWorkspaceUpdate, onOpenCon
       setConflictFiles([]);
       setResolvedFiles(new Set());
       invalidateWriteCache();
-      refreshStatus();
+      await refreshStatus();
       await useAppStore.persist.rehydrate();
     } else {
       showOp('error', result.error || 'Failed to abort merge');
@@ -1201,7 +1236,9 @@ export default function GitSettingsTab({ workspace, onWorkspaceUpdate, onOpenCon
                         onClick={() => handleViewFileDiff(file.path, true)}
                       >
                         {statusIcon(file.status)}
-                        <span className='text-[11px] font-mono text-gray-300 truncate flex-1'>{file.path}</span>
+                        <span className='text-[11px] font-mono text-gray-300 truncate flex-1'>
+                          {file.origPath ? `${file.origPath} → ${file.path}` : file.path}
+                        </span>
                         {statusBadge(file.status)}
                         <div className='flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0'>
                           <button
