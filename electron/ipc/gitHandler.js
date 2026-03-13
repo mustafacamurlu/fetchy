@@ -6,7 +6,7 @@
  *          git-merge-conflicts, git-is-merging, git-show-conflict-version,
  *          git-resolve-conflict, git-resolve-all-conflicts,
  *          git-read-file-content, git-show-base-version,
- *          git-write-resolved-content, git-merge-abort
+ *          git-write-resolved-content, git-merge-abort, git-diff-file
  *
  * @module electron/ipc/gitHandler
  */
@@ -17,18 +17,26 @@ const path = require('path');
 const { execFile } = require('child_process');
 const { requireString, requireDirectoryPath, requireSafeRelativePath, requireOneOf, optionalString, requirePositiveInt, requireArray } = require('./validate');
 
-// Unique null-byte delimiter for git log parsing —
-// impossible in commit messages, avoids conflicts with | or other characters.
-const GIT_LOG_SEP = '\x00';
+// Delimiter for git --format arguments: use git's %x00 specifier so the
+// argument string itself contains no literal null bytes (Node rejects those),
+// but git still outputs \x00 in the result for reliable parsing.
+const GIT_LOG_FMT_SEP = '%x00';     // used inside --format= strings
+const GIT_LOG_PARSE_SEP = '\x00';   // used to split the output
 
 /**
  * Run a git command in the given cwd.
  * Returns { success, stdout, stderr }.
+ * @param {string[]} args
+ * @param {string} cwd
+ * @param {number} [timeout=30000]
+ * @param {object} [env] - Extra environment variables merged with process.env
  */
-function runGit(args, cwd, timeout = 30000) {
+function runGit(args, cwd, timeout = 30000, env) {
   return new Promise((resolve) => {
     const gitBin = 'git';
-    execFile(gitBin, args, { cwd, timeout, maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
+    const opts = { cwd, timeout, maxBuffer: 10 * 1024 * 1024 };
+    if (env) opts.env = { ...process.env, ...env };
+    execFile(gitBin, args, opts, (error, stdout, stderr) => {
       if (error) {
         resolve({ success: false, stdout: stdout || '', stderr: stderr || error.message });
       } else {
@@ -39,7 +47,17 @@ function runGit(args, cwd, timeout = 30000) {
 }
 
 /**
- * Ensures history.json is listed in .gitignore for a git-native workspace.
+ * Check if a directory is a git repository.
+ * @param {string} directory
+ * @returns {boolean}
+ */
+function isGitRepo(directory) {
+  if (!directory || !fs.existsSync(directory)) return false;
+  return fs.existsSync(path.join(directory, '.git'));
+}
+
+/**
+ * Ensures history.json and meta.json are listed in .gitignore for a git-native workspace.
  * Creates or appends to .gitignore without clobbering existing content.
  */
 function ensureHistoryJsonIgnored(directory) {
@@ -51,11 +69,12 @@ function ensureHistoryJsonIgnored(directory) {
       content = fs.readFileSync(gitignorePath, 'utf-8');
     }
     const lines = content.split(/\r?\n/).map((l) => l.trim());
-    if (!lines.includes('history.json')) {
+    const toAdd = ['history.json', 'meta.json'].filter((f) => !lines.includes(f));
+    if (toAdd.length > 0) {
       const separator = content.length > 0 && !content.endsWith('\n') ? '\n' : '';
       fs.writeFileSync(
         gitignorePath,
-        content + separator + '\n# Fetchy request history - local only, never commit\nhistory.json\n',
+        content + separator + '\n# Fetchy request history - local only, never commit\n' + toAdd.join('\n') + '\n',
         'utf-8'
       );
     }
@@ -100,11 +119,32 @@ function register(ipcMain, deps) {
       const branchResult = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], directory);
       const branch = branchResult.success ? branchResult.stdout.trim() : 'unknown';
 
-      // Get status (porcelain for machine-readable)
-      const statusResult = await runGit(['status', '--porcelain'], directory);
-      const changes = statusResult.success
-        ? statusResult.stdout.trim().split('\n').filter((l) => l.trim() !== '')
-        : [];
+      // Get status (porcelain with -z for NUL-separated, unambiguous output)
+      const statusResult = await runGit(['status', '--porcelain=v1', '-z'], directory);
+      const changes = [];
+      const changesDetailed = [];
+      if (statusResult.success && statusResult.stdout) {
+        const parts = statusResult.stdout.split('\x00');
+        let i = 0;
+        while (i < parts.length) {
+          const part = parts[i];
+          if (part.length < 3 || part[2] !== ' ') { i++; continue; }
+          const x = part[0];
+          const y = part[1];
+          const filePath = part.substring(3);
+          if ((x === 'R' || x === 'C') && i + 1 < parts.length) {
+            // Rename/copy: current part has orig path, next NUL-separated part has new path
+            i++;
+            const newPath = parts[i];
+            changesDetailed.push({ indexStatus: x, workTreeStatus: y, path: newPath, origPath: filePath });
+            changes.push(`${x}${y} ${filePath} -> ${newPath}`);
+          } else {
+            changesDetailed.push({ indexStatus: x, workTreeStatus: y, path: filePath });
+            changes.push(`${x}${y} ${filePath}`);
+          }
+          i++;
+        }
+      }
 
       // Get remote URL
       const remoteResult = await runGit(['remote', 'get-url', 'origin'], directory);
@@ -112,12 +152,12 @@ function register(ipcMain, deps) {
 
       // Get last commit info
       const logResult = await runGit(
-        ['log', '-1', `--format=%H${GIT_LOG_SEP}%s${GIT_LOG_SEP}%an${GIT_LOG_SEP}%ai`],
+        ['log', '-1', `--format=%H${GIT_LOG_FMT_SEP}%s${GIT_LOG_FMT_SEP}%an${GIT_LOG_FMT_SEP}%ai`],
         directory
       );
       let lastCommit = null;
       if (logResult.success && logResult.stdout.trim()) {
-        const parts = logResult.stdout.trim().split(GIT_LOG_SEP);
+        const parts = logResult.stdout.trim().split(GIT_LOG_PARSE_SEP);
         lastCommit = {
           hash: parts[0] || '',
           message: parts[1] || '',
@@ -141,11 +181,12 @@ function register(ipcMain, deps) {
         isRepo: true,
         branch,
         changes,
+        changesDetailed,
         remoteUrl,
         lastCommit,
         ahead,
         behind,
-        hasChanges: changes.length > 0,
+        hasChanges: changesDetailed.length > 0,
       };
     } catch (error) {
       return { success: false, error: error.message };
@@ -168,7 +209,7 @@ function register(ipcMain, deps) {
       if (!fs.existsSync(gitignorePath)) {
         fs.writeFileSync(
           gitignorePath,
-          '# Fetchy secrets - never commit\n.secrets/\nai-secrets.json\nai-secrets.enc\nfetchy-secrets.json\nfetchy-secrets.enc\n\n# Fetchy request history - local only, never commit\nhistory.json\n\n# OS files\n.DS_Store\nThumbs.db\n',
+          '# Fetchy secrets - never commit\n.secrets/\nai-secrets.json\nai-secrets.enc\nfetchy-secrets.json\nfetchy-secrets.enc\n\n# Fetchy request history - local only, never commit\nhistory.json\nmeta.json\n\n# OS files\n.DS_Store\nThumbs.db\n',
           'utf-8'
         );
       } else {
@@ -182,20 +223,45 @@ function register(ipcMain, deps) {
   });
 
   ipcMain.handle('git-clone', async (event, { url, directory }) => {
-    try {      requireString(url, 'url', 2000);
-      requireDirectoryPath(directory, 'directory');      if (!url) return { success: false, error: 'No repository URL specified' };
+    try {
+      requireString(url, 'url', 2000);
+      requireDirectoryPath(directory, 'directory');
+      if (!url) return { success: false, error: 'No repository URL specified' };
       if (!directory) return { success: false, error: 'No directory specified' };
 
       const parentDir = path.dirname(directory);
       if (!fs.existsSync(parentDir)) fs.mkdirSync(parentDir, { recursive: true });
+
+      // Disable interactive credential prompts — they hang in a headless execFile
+      // context.  Git Credential Manager (Windows) will still use stored/cached
+      // credentials; this only prevents a blocking tty/GUI prompt that can never
+      // be answered from within Electron's child_process.
+      const cloneEnv = { GIT_TERMINAL_PROMPT: '0' };
+
+      /**
+       * Translate raw git stderr into a more user-friendly message when the
+       * clone fails due to authentication or unreachable host.
+       */
+      const friendlyCloneError = (stderr) => {
+        const lower = (stderr || '').toLowerCase();
+        if (lower.includes('authentication failed') || lower.includes('could not read username') || lower.includes('401') || lower.includes('403')) {
+          return (
+            (stderr.trim()) +
+            '\n\nTip: For corporate / private repositories, embed a Personal Access Token in the URL:\n' +
+            '  https://<token-name>:<token>@host/path/to/repo.git\n' +
+            'or make sure your git credential manager has valid credentials stored.'
+          );
+        }
+        return stderr;
+      };
 
       if (fs.existsSync(directory)) {
         const files = fs.readdirSync(directory);
         if (files.length > 0) {
           // Directory is not empty — clone to temp then move
           const tmpDir = directory + '_git_clone_tmp_' + Date.now();
-          const cloneResult = await runGit(['clone', url, tmpDir], parentDir, 120000);
-          if (!cloneResult.success) return { success: false, error: cloneResult.stderr };
+          const cloneResult = await runGit(['clone', url, tmpDir], parentDir, 120000, cloneEnv);
+          if (!cloneResult.success) return { success: false, error: friendlyCloneError(cloneResult.stderr) };
 
           const clonedEntries = fs.readdirSync(tmpDir, { withFileTypes: true });
           for (const entry of clonedEntries) {
@@ -218,8 +284,8 @@ function register(ipcMain, deps) {
       }
 
       // Directory is empty or doesn't exist – clone directly
-      const result = await runGit(['clone', url, directory], parentDir, 120000);
-      if (!result.success) return { success: false, error: result.stderr };
+      const result = await runGit(['clone', url, directory], parentDir, 120000, cloneEnv);
+      if (!result.success) return { success: false, error: friendlyCloneError(result.stderr) };
       ensureHistoryJsonIgnored(directory);
       return { success: true };
     } catch (error) {
@@ -232,6 +298,7 @@ function register(ipcMain, deps) {
   ipcMain.handle('git-pull', async (event, { directory }) => {
     try {
       if (!directory) return { success: false, error: 'No directory specified' };
+      if (!isGitRepo(directory)) return { success: false, error: 'Not a git repository. Initialize or clone first.' };
 
       const statusCheck = await runGit(['status', '--porcelain'], directory);
       const hasUncommitted = statusCheck.success && statusCheck.stdout.trim().length > 0;
@@ -271,6 +338,7 @@ function register(ipcMain, deps) {
   ipcMain.handle('git-push', async (event, { directory }) => {
     try {
       if (!directory) return { success: false, error: 'No directory specified' };
+      if (!isGitRepo(directory)) return { success: false, error: 'Not a git repository. Initialize or clone first.' };
       const result = await runGit(['push'], directory, 120000);
       if (!result.success) {
         const fullOutput = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
@@ -285,6 +353,7 @@ function register(ipcMain, deps) {
   ipcMain.handle('git-add-commit', async (event, { directory, message }) => {
     try {
       if (!directory) return { success: false, error: 'No directory specified' };
+      if (!isGitRepo(directory)) return { success: false, error: 'Not a git repository' };
       if (!message) message = `Fetchy auto-commit ${new Date().toISOString()}`;
 
       const addResult = await runGit(['add', '-A'], directory);
@@ -306,6 +375,7 @@ function register(ipcMain, deps) {
   ipcMain.handle('git-add-commit-push', async (event, { directory, message }) => {
     try {
       if (!directory) return { success: false, error: 'No directory specified' };
+      if (!isGitRepo(directory)) return { success: false, error: 'Not a git repository' };
       if (!message) message = `Fetchy auto-sync ${new Date().toISOString()}`;
 
       const addResult = await runGit(['add', '-A'], directory);
@@ -332,9 +402,10 @@ function register(ipcMain, deps) {
   ipcMain.handle('git-log', async (event, { directory, count }) => {
     try {
       if (!directory) return { success: false, error: 'No directory specified' };
+      if (!isGitRepo(directory)) return { success: true, commits: [] };
       const n = count || 20;
       const result = await runGit(
-        ['log', `--max-count=${n}`, `--format=%H${GIT_LOG_SEP}%s${GIT_LOG_SEP}%an${GIT_LOG_SEP}%ai`],
+        ['log', `--max-count=${n}`, `--format=%H${GIT_LOG_FMT_SEP}%s${GIT_LOG_FMT_SEP}%an${GIT_LOG_FMT_SEP}%ai`],
         directory
       );
       if (!result.success) return { success: false, error: result.stderr };
@@ -344,7 +415,7 @@ function register(ipcMain, deps) {
         .split('\n')
         .filter((l) => l.trim() !== '')
         .map((line) => {
-          const parts = line.split(GIT_LOG_SEP);
+          const parts = line.split(GIT_LOG_PARSE_SEP);
           return {
             hash: parts[0] || '',
             message: parts[1] || '',
@@ -361,6 +432,7 @@ function register(ipcMain, deps) {
   ipcMain.handle('git-remote-get', async (event, { directory }) => {
     try {
       if (!directory) return { success: false, error: 'No directory specified' };
+      if (!isGitRepo(directory)) return { success: false, url: '' };
       const result = await runGit(['remote', 'get-url', 'origin'], directory);
       if (!result.success) return { success: false, url: '' };
       return { success: true, url: result.stdout.trim() };
@@ -373,6 +445,7 @@ function register(ipcMain, deps) {
     try {
       if (!directory) return { success: false, error: 'No directory specified' };
       if (!url) return { success: false, error: 'No URL specified' };
+      if (!isGitRepo(directory)) return { success: false, error: 'Not a git repository' };
 
       const checkResult = await runGit(['remote'], directory);
       const remotes = checkResult.success ? checkResult.stdout.trim().split('\n') : [];
@@ -393,6 +466,7 @@ function register(ipcMain, deps) {
   ipcMain.handle('git-fetch', async (event, { directory }) => {
     try {
       if (!directory) return { success: false, error: 'No directory specified' };
+      if (!isGitRepo(directory)) return { success: false, error: 'Not a git repository' };
       const result = await runGit(['fetch', '--all'], directory, 60000);
       if (!result.success) return { success: false, error: result.stderr };
       return { success: true };
@@ -439,6 +513,7 @@ function register(ipcMain, deps) {
   ipcMain.handle('git-merge-conflicts', async (event, { directory }) => {
     try {
       if (!directory) return { success: false, files: [], error: 'No directory specified' };
+      if (!isGitRepo(directory)) return { success: true, files: [] };
       const result = await runGit(['diff', '--name-only', '--diff-filter=U'], directory);
       if (!result.success) return { success: false, files: [], error: result.stderr };
       const files = result.stdout.trim().split('\n').filter(l => l.trim());
@@ -578,14 +653,15 @@ function register(ipcMain, deps) {
   ipcMain.handle('git-list-branches', async (event, { directory }) => {
     try {
       requireDirectoryPath(directory, 'directory');
+      if (!isGitRepo(directory)) return { success: true, local: [], remote: [] };
       const localResult = await runGit(
-        ['branch', '--format=%(refname:short)' + GIT_LOG_SEP + '%(objectname:short)' + GIT_LOG_SEP + '%(HEAD)'],
+        ['branch', '--format=%(refname:short)' + GIT_LOG_FMT_SEP + '%(objectname:short)' + GIT_LOG_FMT_SEP + '%(HEAD)'],
         directory
       );
       const local = [];
       if (localResult.success) {
         localResult.stdout.trim().split('\n').filter(l => l.trim()).forEach(line => {
-          const parts = line.split(GIT_LOG_SEP);
+          const parts = line.split(GIT_LOG_PARSE_SEP);
           local.push({
             name: parts[0] || '',
             hash: parts[1] || '',
@@ -595,13 +671,13 @@ function register(ipcMain, deps) {
         });
       }
       const remoteResult = await runGit(
-        ['branch', '-r', '--format=%(refname:short)' + GIT_LOG_SEP + '%(objectname:short)'],
+        ['branch', '-r', '--format=%(refname:short)' + GIT_LOG_FMT_SEP + '%(objectname:short)'],
         directory
       );
       const remote = [];
       if (remoteResult.success) {
         remoteResult.stdout.trim().split('\n').filter(l => l.trim()).forEach(line => {
-          const parts = line.split(GIT_LOG_SEP);
+          const parts = line.split(GIT_LOG_PARSE_SEP);
           const name = parts[0] || '';
           if (name.includes('HEAD')) return;
           remote.push({
@@ -754,6 +830,46 @@ function register(ipcMain, deps) {
       return { success: true, output: result.stdout.trim() };
     } catch (error) {
       return { success: false, error: error.message };
+    }
+  });
+
+  // ─── Diff operations ────────────────────────────────────────────────────
+
+  ipcMain.handle('git-diff-file', async (event, { directory, filepath, staged }) => {
+    try {
+      requireDirectoryPath(directory, 'directory');
+      requireSafeRelativePath(filepath, 'filepath');
+      if (!isGitRepo(directory)) return { success: false, diff: '', error: 'Not a git repository' };
+
+      // Check if file is untracked
+      const checkResult = await runGit(['status', '--porcelain', '--', filepath], directory);
+      const isUntracked = checkResult.success && checkResult.stdout.trim().startsWith('??');
+
+      if (isUntracked) {
+        // For untracked files, git diff returns nothing — use --no-index against /dev/null
+        const noIdxResult = await runGit(['diff', '--no-index', '--', '/dev/null', filepath], directory);
+        // --no-index exits with code 1 when files differ, so stdout may be in either case
+        const diff = noIdxResult.stdout || '';
+        if (diff) return { success: true, diff };
+        // Fallback: read file content directly
+        const fullPath = path.join(directory, filepath);
+        if (fs.existsSync(fullPath)) {
+          const content = fs.readFileSync(fullPath, 'utf-8');
+          const lines = content.split('\n');
+          const header = `diff --git a/${filepath} b/${filepath}\nnew file\n--- /dev/null\n+++ b/${filepath}\n@@ -0,0 +1,${lines.length} @@`;
+          return { success: true, diff: header + '\n' + lines.map(l => '+' + l).join('\n') };
+        }
+        return { success: true, diff: '(new untracked file)' };
+      }
+
+      const args = staged
+        ? ['diff', '--cached', '--', filepath]
+        : ['diff', '--', filepath];
+      const result = await runGit(args, directory);
+      if (!result.success) return { success: false, diff: '', error: result.stderr };
+      return { success: true, diff: result.stdout };
+    } catch (error) {
+      return { success: false, diff: '', error: error.message };
     }
   });
 }
