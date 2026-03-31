@@ -305,14 +305,77 @@ export default function WorkspacesModal({ isOpen, onClose }: WorkspacesModalProp
             </div>
           )}
 
-          {/* ADD / EDIT form */}
-          {mode === 'add' &&
-            renderForm('New Workspace', handleAdd, () => {
-              setMode('list');
-              setForm(emptyForm);
-              setStatus(null);
-            })}
+          {/* ADD form */}
+          {mode === 'add' && (
+            <div className="space-y-4">
+              <h3 className="text-sm font-semibold text-white uppercase tracking-wider">New Workspace</h3>
 
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1">Workspace Name</label>
+                    <input
+                      type="text"
+                      value={form.name}
+                      onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
+                      className="w-full px-3 py-2 bg-[#0f0f1a] border border-[#2d2d44] rounded text-white text-sm focus:outline-none focus:border-purple-500"
+                      placeholder="e.g. My Project"
+                      autoFocus
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1 flex items-center gap-1">
+                      <FolderOpen size={12} />
+                      Home Directory
+                      <span className="text-gray-600">— collections, environments, APIs</span>
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={form.homeDirectory}
+                        onChange={(e) => setForm((p) => ({ ...p, homeDirectory: e.target.value }))}
+                        className="flex-1 px-3 py-2 bg-[#0f0f1a] border border-[#2d2d44] rounded text-white text-sm font-mono focus:outline-none focus:border-purple-500"
+                        placeholder="/path/to/home"
+                      />
+                      {isElectron && (
+                        <button onClick={() => pickDirectory('homeDirectory')} className="px-3 py-2 bg-[#2d2d44] text-gray-300 rounded hover:bg-[#3d3d54] transition-colors" title="Browse">
+                          <FolderOpen size={16} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1 flex items-center gap-1">
+                      <Lock size={12} />
+                      Secrets Directory
+                      <span className="text-gray-600">— secret variable values only</span>
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={form.secretsDirectory}
+                        onChange={(e) => setForm((p) => ({ ...p, secretsDirectory: e.target.value }))}
+                        className="flex-1 px-3 py-2 bg-[#0f0f1a] border border-[#2d2d44] rounded text-white text-sm font-mono focus:outline-none focus:border-purple-500"
+                        placeholder="/path/to/secrets"
+                      />
+                      {isElectron && (
+                        <button onClick={() => pickDirectory('secretsDirectory')} className="px-3 py-2 bg-[#2d2d44] text-gray-300 rounded hover:bg-[#3d3d54] transition-colors" title="Browse">
+                          <FolderOpen size={16} />
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-600 mt-1">Keep this in a secure, private location.</p>
+                  </div>
+                  <div className="flex gap-2 pt-2">
+                    <button onClick={handleAdd} disabled={isBusy} className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-50 transition-colors text-sm">
+                      {isBusy ? <RefreshCw size={14} className="animate-spin" /> : <Check size={14} />}
+                      Create Workspace
+                    </button>
+                    <button onClick={() => { setMode('list'); setForm(emptyForm); setStatus(null); }} className="px-4 py-2 text-gray-400 hover:text-white transition-colors text-sm">
+                      Cancel
+                    </button>
+                  </div>
+            </div>
+          )}
+          {/* EDIT form */}
           {mode === 'edit' &&
             renderForm('Edit Workspace', handleEditSave, () => {
               setMode('list');

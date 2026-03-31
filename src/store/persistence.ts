@@ -54,72 +54,29 @@ export const isElectron =
   typeof window !== 'undefined' && !!(window as any).electronAPI;
 
 // ---------------------------------------------------------------------------
-// Git auto-sync (debounced)
+// Active workspace ID callback (browser-mode storage isolation)
+// ---------------------------------------------------------------------------
+// In browser mode we use localStorage.  Without workspace-scoping every
+// workspace would share the same "fetchy-storage" key.  workspacesStore
+// registers a provider here so we can suffix the key with the active
+// workspace ID, giving each workspace its own isolated localStorage slot.
 // ---------------------------------------------------------------------------
 
-let gitSyncTimer: ReturnType<typeof setTimeout> | null = null;
-
-// ---------------------------------------------------------------------------
-// Git auto-sync callback (#31)
-// ---------------------------------------------------------------------------
-// To avoid a circular `require()` between persistence.ts and workspacesStore,
-// we use a callback pattern.  workspacesStore registers a callback at init time
-// that provides the info persistence needs to decide if/how to git-sync.
-// ---------------------------------------------------------------------------
-
-interface GitSyncInfo {
-  gitAutoSync: boolean;
-  homeDirectory: string;
-}
-
-/** Callback that returns git sync info for the active workspace, or null. */
-type GitSyncInfoProvider = () => GitSyncInfo | null;
-
-let _gitSyncInfoProvider: GitSyncInfoProvider | null = null;
+type ActiveWorkspaceIdProvider = () => string | null;
+let _activeWorkspaceIdProvider: ActiveWorkspaceIdProvider | null = null;
 
 /**
- * Register a callback that provides git sync info for the active workspace.
- * Called by workspacesStore at module init time to break the circular dependency.
+ * Register a callback that returns the currently-active workspace ID.
+ * Called by workspacesStore at module init time (same pattern as git sync).
  */
-export function registerGitSyncProvider(provider: GitSyncInfoProvider) {
-  _gitSyncInfoProvider = provider;
+export function registerActiveWorkspaceIdProvider(provider: ActiveWorkspaceIdProvider) {
+  _activeWorkspaceIdProvider = provider;
 }
 
-/**
- * Trigger a debounced git auto-commit+push if the active workspace has
- * gitAutoSync enabled.  Called after every successful write to storage.
- * Skips sync when a merge is in progress to avoid committing half-resolved conflicts.
- */
-function triggerGitAutoSync() {
-  if (!isElectron) return;
-  if (!_gitSyncInfoProvider) return;
-
-  const info = _gitSyncInfoProvider();
-  if (!info?.gitAutoSync || !info.homeDirectory) return;
-
-  if (gitSyncTimer) clearTimeout(gitSyncTimer);
-  gitSyncTimer = setTimeout(async () => {
-    try {
-      const api = (window as any).electronAPI;
-      if (!api?.gitAddCommitPush) return;
-
-      // Do NOT auto-sync while a merge conflict is in progress
-      if (api.gitIsMerging) {
-        const mergeState = await api.gitIsMerging({ directory: info.homeDirectory });
-        if (mergeState?.merging) {
-          console.warn('Git auto-sync skipped: merge in progress');
-          return;
-        }
-      }
-
-      await api.gitAddCommitPush({
-        directory: info.homeDirectory,
-        message: `Fetchy auto-sync ${new Date().toISOString()}`,
-      });
-    } catch (e) {
-      console.error('Git auto-sync failed:', e);
-    }
-  }, 3000);
+/** Returns the browser localStorage key scoped to the active workspace. */
+function getBrowserStorageKey(baseName: string): string {
+  const wsId = _activeWorkspaceIdProvider?.();
+  return wsId ? `${baseName}:${wsId}` : baseName;
 }
 
 // ---------------------------------------------------------------------------
@@ -640,9 +597,6 @@ export const createCustomStorage = (): StateStorage => {
           await api.writeSecrets({
             content: JSON.stringify(secretsStorage, null, 2),
           });
-
-          // Trigger git auto-sync
-          triggerGitAutoSync();
         } catch (error) {
           console.error('Error writing to split file storage:', error);
         }
@@ -671,14 +625,16 @@ export const createCustomStorage = (): StateStorage => {
   // -- Browser / localStorage fallback ----------------------------------------
   return {
     getItem: (name: string): string | null => {
-      const raw = localStorage.getItem(name);
+      // Use a workspace-scoped key so each browser workspace has its own slot.
+      const scopedName = getBrowserStorageKey(name);
+      const raw = localStorage.getItem(scopedName);
       if (!raw) return null;
 
       try {
         let stateWrapper = JSON.parse(raw);
 
         // Hydrate: merge secrets + strip transient values (#27 shared pipeline)
-        const secretsRaw = localStorage.getItem(`${name}-secrets`);
+        const secretsRaw = localStorage.getItem(`${scopedName}-secrets`);
         if (secretsRaw) {
           const secretsStorage: SecretsStorage = JSON.parse(secretsRaw);
           if (secretsStorage?.secrets) {
@@ -701,21 +657,23 @@ export const createCustomStorage = (): StateStorage => {
 
     setItem: (name: string, value: string): void => {
       try {
+        const scopedName = getBrowserStorageKey(name);
         const stateWrapper = JSON.parse(value);
 
         // Shared write pipeline: truncate history, strip transient, extract secrets (#27)
         const { cleanState, secretsMap } = prepareForWrite(stateWrapper);
-        localStorage.setItem(name, JSON.stringify(cleanState));
+        localStorage.setItem(scopedName, JSON.stringify(cleanState));
         const secretsStorage: SecretsStorage = { version: '1.0', secrets: secretsMap };
-        localStorage.setItem(`${name}-secrets`, JSON.stringify(secretsStorage));
+        localStorage.setItem(`${scopedName}-secrets`, JSON.stringify(secretsStorage));
       } catch (error) {
         console.error('Error persisting to localStorage:', error);
       }
     },
 
     removeItem: (name: string): void => {
-      localStorage.removeItem(name);
-      localStorage.removeItem(`${name}-secrets`);
+      const scopedName = getBrowserStorageKey(name);
+      localStorage.removeItem(scopedName);
+      localStorage.removeItem(`${scopedName}-secrets`);
     },
   };
 };
