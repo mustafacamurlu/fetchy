@@ -6,7 +6,7 @@ import { TabState } from '../types';
 
 export default function TabBar() {
   const {
-    tabs, activeTabId, setActiveTab, closeTab, getRequest,
+    tabs, activeTabId, pendingCloseTabId, setActiveTab, requestCloseTab, confirmCloseTab, cancelCloseTab, getRequest,
     updateRequest, updateCollection, updateEnvironment, updateOpenApiDocument,
   } = useAppStore();
   const [hoveredTab, setHoveredTab] = useState<string | null>(null);
@@ -72,25 +72,25 @@ export default function TabBar() {
   const handleCloseTabsToRight = (tabId: string) => {
     const index = tabs.findIndex(t => t.id === tabId);
     const tabsToClose = tabs.slice(index + 1);
-    tabsToClose.forEach(tab => closeTab(tab.id));
+    tabsToClose.forEach(tab => requestCloseTab(tab.id));
     setContextMenu(null);
   };
 
   const handleCloseTabsToLeft = (tabId: string) => {
     const index = tabs.findIndex(t => t.id === tabId);
     const tabsToClose = tabs.slice(0, index);
-    tabsToClose.forEach(tab => closeTab(tab.id));
+    tabsToClose.forEach(tab => requestCloseTab(tab.id));
     setContextMenu(null);
   };
 
   const handleCloseOtherTabs = (tabId: string) => {
     const tabsToClose = tabs.filter(t => t.id !== tabId);
-    tabsToClose.forEach(tab => closeTab(tab.id));
+    tabsToClose.forEach(tab => requestCloseTab(tab.id));
     setContextMenu(null);
   };
 
   const handleCloseAllTabs = () => {
-    tabs.forEach(tab => closeTab(tab.id));
+    tabs.forEach(tab => requestCloseTab(tab.id));
     setContextMenu(null);
   };
 
@@ -118,6 +118,31 @@ export default function TabBar() {
           }}
         >
           {tabs.find(t => t.id === hoveredTab)?.title}
+        </div>
+      )}
+
+      {pendingCloseTabId && (
+        <div className="fixed inset-0 z-[10001] flex items-center justify-center bg-black/60 px-4">
+          <div className="bg-fetchy-modal border border-fetchy-border rounded-lg shadow-2xl p-6 max-w-sm w-full">
+            <h3 className="text-base font-semibold text-fetchy-text mb-2">Discard changes?</h3>
+            <p className="text-sm text-fetchy-text-muted mb-5">
+              Are you sure you want to close without saving?
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={cancelCloseTab}
+                className="btn btn-secondary"
+              >
+                Keep Editing
+              </button>
+              <button
+                onClick={confirmCloseTab}
+                className="btn bg-red-600 hover:bg-red-700 text-white"
+              >
+                Discard
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -188,7 +213,7 @@ export default function TabBar() {
               // Middle click (button 1) closes the tab
               if (e.button === 1) {
                 e.preventDefault();
-                closeTab(tab.id);
+                requestCloseTab(tab.id);
               }
             }}
             onMouseEnter={() => !editingTabId && handleMouseEnter(tab.id)}
@@ -267,7 +292,7 @@ export default function TabBar() {
               className="tab-close-btn p-0.5 hover:bg-fetchy-border rounded shrink-0"
               onClick={(e) => {
                 e.stopPropagation();
-                closeTab(tab.id);
+                requestCloseTab(tab.id);
               }}
             >
               <X size={14} />

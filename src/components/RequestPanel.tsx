@@ -154,6 +154,8 @@ export default function RequestPanel({ setResponse, setSentRequest, setIsLoading
     }
   }, [request, activeTab, updateTab]);
 
+  const canSave = !!activeTab?.isHistoryItem || !!activeTab?.isModified;
+
   // Detect cURL paste on the URL bar and auto-populate the request
   const handleUrlPaste = useCallback((e: React.ClipboardEvent<HTMLInputElement>) => {
     const text = e.clipboardData.getData('text').trim();
@@ -563,7 +565,12 @@ export default function RequestPanel({ setResponse, setSentRequest, setIsLoading
         <Tooltip content={activeTab?.isHistoryItem ? "Save to Request History Rollback" : "Save Request"}>
           <button
             onClick={handleSave}
-            className="px-4 py-2 text-sm font-medium text-fetchy-text-muted hover:text-fetchy-text hover:bg-fetchy-border transition-colors flex items-center gap-1"
+            disabled={!canSave}
+            className={`px-4 py-2 text-sm font-medium transition-colors flex items-center gap-1 ${
+              canSave
+                ? 'text-fetchy-accent hover:bg-fetchy-accent/10'
+                : 'text-fetchy-text-muted hover:text-fetchy-text hover:bg-fetchy-border cursor-not-allowed opacity-60'
+            }`}
           >
             <Save size={16} />
             {activeTab?.isHistoryItem ? 'Save to Rollback' : 'Save'}

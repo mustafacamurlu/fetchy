@@ -1,8 +1,8 @@
-import { useState, useMemo, useEffect } from 'react';
-import { Send, ArrowDown, Copy, Check, Download, FileImage, Braces } from 'lucide-react';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { Send, ArrowDown, Copy, Check, Download, FileImage, Braces, Search, ChevronUp, ChevronDown, X } from 'lucide-react';
 import { ApiResponse, ApiRequest } from '../types';
 import { formatBytes, formatTime, getStatusColor, prettyPrintJson, getMethodBgColor } from '../utils/helpers';
-import CodeEditor from './CodeEditor';
+import CodeEditor, { type CodeEditorHandle } from './CodeEditor';
 import JSONViewer from './JSONViewer';
 import { AIResponseToolbar } from './AIAssistant';
 
@@ -16,18 +16,41 @@ export default function ResponsePanel({ response, sentRequest, isLoading }: Resp
   const [activeTab, setActiveTab] = useState<'response-body' | 'response-headers' | 'request-headers' | 'request-body' | 'console'>('response-body');
   const [copied, setCopied] = useState(false);
   const [manualPrettyPrint, setManualPrettyPrint] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchActiveIdx, setSearchActiveIdx] = useState(0);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const codeEditorResponseRef = useRef<CodeEditorHandle>(null);
+
+  const openSearch = useCallback(() => {
+    setSearchOpen(true);
+    setTimeout(() => searchInputRef.current?.focus(), 0);
+  }, []);
+
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    setSearchQuery('');
+    setSearchActiveIdx(0);
+  }, []);
+
+  function escapeRegexPanel(s: string) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
 
   // Reset pretty-print state on new response
   useEffect(() => {
     setManualPrettyPrint(false);
-  }, [response]);
+    closeSearch();
+  }, [response, closeSearch]);
+
+  const responseHeaders = response?.headers ?? {};
 
   // Detect if body is valid JSON but content-type is not application/json (JSONViewer handles that).
   // Skip the JSON.parse check for large bodies — the pretty-print button is non-critical
   // and parsing 2 MB+ synchronously on every response would block the main thread.
   const isJsonBody = useMemo(() => {
     if (!response || response.bodyEncoding === 'base64') return false;
-    if (response.headers['content-type']?.includes('application/json')) return false;
+    if (responseHeaders['content-type']?.includes('application/json')) return false;
     if (response.body.length > 100_000) return false;
     try {
       JSON.parse(response.body);
@@ -45,9 +68,36 @@ export default function ResponsePanel({ response, sentRequest, isLoading }: Resp
 
   const showPrettyPrintButton = isJsonBody && !isAlreadyPretty && !manualPrettyPrint;
 
+  // Searchable text: the literal string shown in the response body area
+  const searchableText = useMemo(() => {
+    if (!response || response.bodyEncoding === 'base64') return '';
+    if (responseHeaders['content-type']?.includes('application/json')) return response.body;
+    return manualPrettyPrint ? prettyPrintJson(response.body) : response.body;
+  }, [response, manualPrettyPrint, responseHeaders]);
+
+  const searchMatchCount = useMemo(() => {
+    if (!searchQuery.trim() || !searchableText) return 0;
+    try {
+      return [...searchableText.matchAll(new RegExp(escapeRegexPanel(searchQuery), 'gi'))].length;
+    } catch { return 0; }
+  }, [searchQuery, searchableText]);
+
+  // Clamp active index so stale values after query/response changes stay valid
+  const effectiveSearchIdx = searchMatchCount > 0 ? searchActiveIdx % searchMatchCount : 0;
+
+  const goToNextMatch = useCallback(() => {
+    if (searchMatchCount === 0) return;
+    setSearchActiveIdx(i => (i + 1) % searchMatchCount);
+  }, [searchMatchCount]);
+
+  const goToPrevMatch = useCallback(() => {
+    if (searchMatchCount === 0) return;
+    setSearchActiveIdx(i => (i - 1 + searchMatchCount) % searchMatchCount);
+  }, [searchMatchCount]);
+
   // Binary response detection (#23)
   const isBinary = response?.bodyEncoding === 'base64';
-  const contentType = response?.headers['content-type']?.split(';')[0]?.trim().toLowerCase() ?? '';
+  const contentType = responseHeaders['content-type']?.split(';')[0]?.trim().toLowerCase() ?? '';
   const isImage = isBinary && contentType.startsWith('image/');
 
   // Build data URI for image preview
@@ -77,7 +127,7 @@ export default function ResponsePanel({ response, sentRequest, isLoading }: Resp
       // For binary, copy a placeholder message — raw bytes can't be usefully pasted
       navigator.clipboard.writeText(`[Binary response: ${formatBytes(response.size)}, ${contentType || 'unknown type'}]`);
     } else {
-      const text = response.headers['content-type']?.includes('application/json')
+      const text = responseHeaders['content-type']?.includes('application/json')
         ? prettyPrintJson(response.body)
         : response.body;
       navigator.clipboard.writeText(text);
@@ -246,7 +296,7 @@ export default function ResponsePanel({ response, sentRequest, isLoading }: Resp
         >
           Response Headers
           <span className="ml-1 px-1.5 py-0.5 text-xs bg-fetchy-accent/20 text-fetchy-accent rounded">
-            {Object.keys(response.headers).length}
+            {Object.keys(responseHeaders).length}
           </span>
         </button>
         {sentRequest && (
@@ -294,8 +344,28 @@ export default function ResponsePanel({ response, sentRequest, isLoading }: Resp
       {/* Content */}
       <div className="flex-1 overflow-hidden">
         {activeTab === 'response-body' && (
-          <div className="relative h-full flex flex-col">
-            <div className="absolute top-2 right-4 z-10 flex items-center gap-1">
+          <div
+            className="relative h-full flex flex-col"
+            onKeyDown={e => {
+              if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+                e.preventDefault();
+                e.stopPropagation();
+                openSearch();
+              }
+            }}
+          >
+            <div className="absolute top-2 right-4 z-20 flex items-center gap-1">
+              {!isBinary && (
+                <button
+                  onClick={() => { searchOpen ? closeSearch() : openSearch(); }}
+                  className={`p-1.5 rounded bg-fetchy-card/80 hover:bg-fetchy-border transition-colors ${
+                    searchOpen ? 'text-fetchy-accent' : 'text-fetchy-text-muted hover:text-fetchy-text'
+                  }`}
+                  title="Search (Ctrl+F)"
+                >
+                  <Search size={14} />
+                </button>
+              )}
               {showPrettyPrintButton && (
                 <button
                   onClick={() => setManualPrettyPrint(true)}
@@ -313,6 +383,54 @@ export default function ResponsePanel({ response, sentRequest, isLoading }: Resp
                 {copied ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
               </button>
             </div>
+
+            {/* Inline search bar */}
+            {searchOpen && (
+              <div className="flex items-center gap-2 pl-3 pr-[7rem] py-1.5 border-b border-fetchy-border bg-fetchy-card shrink-0">
+                <Search size={13} className="text-fetchy-text-muted shrink-0" />
+                <input
+                  ref={searchInputRef}
+                  type="text"
+                  value={searchQuery}
+                  onChange={e => { setSearchQuery(e.target.value); setSearchActiveIdx(0); }}
+                  onKeyDown={e => {
+                    if (e.key === 'Escape') closeSearch();
+                    else if (e.key === 'Enter') { e.shiftKey ? goToPrevMatch() : goToNextMatch(); }
+                  }}
+                  placeholder="Search in response…"
+                  className="flex-1 min-w-0 bg-transparent text-sm text-fetchy-text outline-none placeholder:text-fetchy-text-muted/60"
+                  autoFocus
+                />
+                {searchQuery && (
+                  <span className="text-xs text-fetchy-text-muted shrink-0 tabular-nums">
+                    {searchMatchCount > 0 ? `${effectiveSearchIdx + 1} / ${searchMatchCount}` : 'No matches'}
+                  </span>
+                )}
+                <button
+                  onClick={goToPrevMatch}
+                  disabled={searchMatchCount === 0}
+                  className="p-0.5 rounded text-fetchy-text-muted hover:text-fetchy-text disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  title="Previous match (Shift+Enter)"
+                >
+                  <ChevronUp size={14} />
+                </button>
+                <button
+                  onClick={goToNextMatch}
+                  disabled={searchMatchCount === 0}
+                  className="p-0.5 rounded text-fetchy-text-muted hover:text-fetchy-text disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  title="Next match (Enter)"
+                >
+                  <ChevronDown size={14} />
+                </button>
+                <button
+                  onClick={closeSearch}
+                  className="p-0.5 rounded text-fetchy-text-muted hover:text-fetchy-text transition-colors"
+                  title="Close (Esc)"
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            )}
             {response.bodyTruncated && (
               <div className="flex items-center gap-2 px-4 py-2 bg-yellow-500/10 border-b border-yellow-500/30 text-yellow-400 text-xs shrink-0">
                 <span>
@@ -363,14 +481,29 @@ export default function ResponsePanel({ response, sentRequest, isLoading }: Resp
                   </button>
                 </div>
               )
-            ) : response.headers['content-type']?.includes('application/json') ? (
-              <JSONViewer data={response.body} />
+            ) : responseHeaders['content-type']?.includes('application/json') ? (
+              <JSONViewer
+                data={response.body}
+                searchQuery={searchOpen ? searchQuery : undefined}
+                searchActiveIndex={searchOpen ? effectiveSearchIdx : undefined}
+              />
             ) : (
               <CodeEditor
+                ref={codeEditorResponseRef}
                 value={manualPrettyPrint ? prettyPrintJson(response.body) : formattedBody}
                 onChange={() => {}}
                 language="json"
                 readOnly
+                searchQuery={searchOpen ? searchQuery : undefined}
+                searchActiveIndex={searchOpen ? effectiveSearchIdx : undefined}
+                onKeyDownIntercept={(e) => {
+                  if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+                    e.preventDefault();
+                    openSearch();
+                    return true;
+                  }
+                  return false;
+                }}
               />
             )}
             </div>
@@ -419,7 +552,7 @@ export default function ResponsePanel({ response, sentRequest, isLoading }: Resp
                 </tr>
               </thead>
               <tbody>
-                {Object.entries(response.headers).map(([key, value]) => (
+                {Object.entries(responseHeaders).map(([key, value]) => (
                   <tr key={key} className="border-b border-fetchy-border/50">
                     <td className="p-2 text-sm font-medium text-fetchy-accent">{key}</td>
                     <td className="p-2 text-sm text-fetchy-text break-all">{value}</td>

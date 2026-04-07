@@ -102,8 +102,12 @@ interface AppStore {
   // Tabs
   tabs: TabState[];
   activeTabId: string | null;
+  pendingCloseTabId: string | null;
   openTab: (tab: Omit<TabState, 'id'>) => void;
+  requestCloseTab: (id: string) => void;
   closeTab: (id: string) => void;
+  confirmCloseTab: () => void;
+  cancelCloseTab: () => void;
   setActiveTab: (id: string) => void;
   updateTab: (id: string, updates: Partial<TabState>) => void;
 
@@ -909,6 +913,7 @@ export const useAppStore = create<AppStore>()(
       // Tabs
       tabs: [],
       activeTabId: null,
+      pendingCloseTabId: null,
 
       openTab: (tab: Omit<TabState, 'id'>) => {
         set(state => {
@@ -939,10 +944,32 @@ export const useAppStore = create<AppStore>()(
         });
       },
 
+      requestCloseTab: (id: string) => {
+        const tab = get().tabs.find(t => t.id === id);
+        if (tab?.isModified) {
+          set(state => {
+            state.pendingCloseTabId = id;
+          });
+          return;
+        }
+
+        get().closeTab(id);
+      },
+
       closeTab: (id: string) => {
         set(state => {
           const index = state.tabs.findIndex(t => t.id === id);
+          if (index === -1) {
+            if (state.pendingCloseTabId === id) {
+              state.pendingCloseTabId = null;
+            }
+            return;
+          }
+
           state.tabs = state.tabs.filter(t => t.id !== id);
+          if (state.pendingCloseTabId === id) {
+            state.pendingCloseTabId = null;
+          }
 
           if (state.activeTabId === id) {
             if (state.tabs.length > 0) {
@@ -952,6 +979,18 @@ export const useAppStore = create<AppStore>()(
               state.activeTabId = null;
             }
           }
+        });
+      },
+
+      confirmCloseTab: () => {
+        const pendingCloseTabId = get().pendingCloseTabId;
+        if (!pendingCloseTabId) return;
+        get().closeTab(pendingCloseTabId);
+      },
+
+      cancelCloseTab: () => {
+        set(state => {
+          state.pendingCloseTabId = null;
         });
       },
 

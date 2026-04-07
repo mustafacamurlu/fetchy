@@ -1,6 +1,6 @@
 import { useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import { EditorView, basicSetup } from 'codemirror';
-import { EditorState, Prec } from '@codemirror/state';
+import { EditorState, Prec, StateEffect, StateField, type Range } from '@codemirror/state';
 import { Decoration, DecorationSet, ViewPlugin, ViewUpdate } from '@codemirror/view';
 import { json } from '@codemirror/lang-json';
 import { javascript } from '@codemirror/lang-javascript';
@@ -8,6 +8,41 @@ import { syntaxHighlighting, HighlightStyle } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { usePreferencesStore } from '../store/preferencesStore';
+
+// ── Search highlight support ──────────────────────────────────────────────────
+function escapeRegex(s: string) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+const setSearchHighlightsEffect = StateEffect.define<{ query: string; activeIndex: number }>();
+
+const searchHighlightField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(decs, tr) {
+    const out = decs.map(tr.changes);
+    for (const eff of tr.effects) {
+      if (eff.is(setSearchHighlightsEffect)) {
+        const { query, activeIndex } = eff.value;
+        if (!query.trim()) return Decoration.none;
+        const text = tr.state.doc.toString();
+        const marks: Range<Decoration>[] = [];
+        try {
+          const re = new RegExp(escapeRegex(query), 'gi');
+          let m: RegExpExecArray | null;
+          let i = 0;
+          while ((m = re.exec(text)) !== null) {
+            const cls = i === activeIndex ? 'cm-search-active' : 'cm-search-hit';
+            marks.push(Decoration.mark({ class: cls }).range(m.index, m.index + m[0].length));
+            i++;
+          }
+          return Decoration.set(marks, true);
+        } catch { return Decoration.none; }
+      }
+    }
+    return out;
+  },
+  provide: f => EditorView.decorations.from(f),
+});
 import { isLightTheme } from '../utils/editorUtils';
 
 // Light-mode syntax highlight style (VS Code Light+-inspired)
@@ -43,6 +78,10 @@ interface CodeEditorProps {
   onCursorActivity?: (value: string, cursorPos: number, coords: { x: number; y: number } | null) => void;
   /** Return true to swallow the event (e.g. while a suggestion dropdown is open) */
   onKeyDownIntercept?: (e: KeyboardEvent) => boolean;
+  /** Highlight all occurrences of this query string */
+  searchQuery?: string;
+  /** Index of the active (scrolled-to) match */
+  searchActiveIndex?: number;
 }
 
 export interface CodeEditorHandle {
@@ -52,7 +91,8 @@ export interface CodeEditorHandle {
 
 const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
   function CodeEditor({ value, onChange, language = 'json', readOnly = false,
-    variableStatuses, onCursorActivity, onKeyDownIntercept }, ref) {
+    variableStatuses, onCursorActivity, onKeyDownIntercept,
+    searchQuery, searchActiveIndex }, ref) {
   const editorRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const { preferences } = usePreferencesStore();
@@ -66,6 +106,13 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
   useEffect(() => { variableStatusesRef.current = variableStatuses ?? {}; }, [variableStatuses]);
   useEffect(() => { onCursorActivityRef.current = onCursorActivity; }, [onCursorActivity]);
   useEffect(() => { onKeyDownInterceptRef.current = onKeyDownIntercept; }, [onKeyDownIntercept]);
+
+  // Stable refs for latest search state — read by the editor-creation effect
+  // so recreated editors immediately inherit any in-progress search.
+  const latestSearchQuery = useRef(searchQuery ?? '');
+  const latestSearchActiveIndex = useRef(searchActiveIndex ?? 0);
+  useEffect(() => { latestSearchQuery.current = searchQuery ?? ''; }, [searchQuery]);
+  useEffect(() => { latestSearchActiveIndex.current = searchActiveIndex ?? 0; }, [searchActiveIndex]);
 
   useEffect(() => {
     if (!editorRef.current) return;
@@ -101,6 +148,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
 
     const extensions = [
       basicSetup,
+      searchHighlightField,
       EditorView.lineWrapping,
       // Apply the appropriate syntax highlight style for the current theme
       syntaxHighlighting(isLight ? lightHighlightStyle : darkHighlightStyle),
@@ -118,6 +166,9 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
         // Override oneDark's near-invisible #3E4451 selection with a clearly contrasted blue
         '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': { backgroundColor: 'rgba(99, 153, 225, 0.45)' },
         '& .cm-content ::selection': { backgroundColor: 'rgba(99, 153, 225, 0.35)' },
+        // Search highlights
+        '.cm-search-hit': { backgroundColor: 'rgba(255, 197, 61, 0.35)', borderRadius: '2px' },
+        '.cm-search-active': { backgroundColor: 'rgba(255, 138, 0, 0.72)', borderRadius: '2px', outline: '1px solid rgba(255, 200, 50, 0.9)' },
       })),
       EditorView.updateListener.of((update) => {
         if (update.docChanged && !readOnly) {
@@ -165,6 +216,16 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
 
     viewRef.current = view;
 
+    // Re-apply any in-progress search after the editor is (re)created
+    if (latestSearchQuery.current.trim()) {
+      view.dispatch({
+        effects: setSearchHighlightsEffect.of({
+          query: latestSearchQuery.current,
+          activeIndex: latestSearchActiveIndex.current,
+        }),
+      });
+    }
+
     return () => {
       view.destroy();
     };
@@ -185,6 +246,31 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
       }
     }
   }, [value]);
+
+  // Apply search highlight decorations and scroll to the active match
+  useEffect(() => {
+    if (!viewRef.current) return;
+    const view = viewRef.current;
+    const query = searchQuery ?? '';
+    const activeIdx = searchActiveIndex ?? 0;
+
+    view.dispatch({ effects: setSearchHighlightsEffect.of({ query, activeIndex: activeIdx }) });
+
+    if (!query.trim()) return;
+    const text = view.state.doc.toString();
+    try {
+      const re = new RegExp(escapeRegex(query), 'gi');
+      let m: RegExpExecArray | null;
+      let i = 0;
+      while ((m = re.exec(text)) !== null) {
+        if (i === activeIdx) {
+          view.dispatch({ effects: EditorView.scrollIntoView(m.index, { y: 'center' }) });
+          break;
+        }
+        i++;
+      }
+    } catch { /**/ }
+  }, [searchQuery, searchActiveIndex]);
 
   useImperativeHandle(ref, () => ({
     insertAtCursor: (text: string) => {

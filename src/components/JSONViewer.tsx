@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback, useEffect, useDeferredValue, startTransition, memo } from 'react';
+import { useMemo, useState, useCallback, useEffect, useDeferredValue, startTransition, memo, createContext, useContext, useRef } from 'react';
 import { isJWT, decodeJWT } from '../utils/helpers';
 import JWTTooltip from './JWTTooltip';
 import {
@@ -9,10 +9,60 @@ import {
 
 interface JSONViewerProps {
   data: string;
+  searchQuery?: string;
+  searchActiveIndex?: number;
 }
 
 // Arrays with more items than this auto-collapse on initial render
 const AUTO_COLLAPSE_ARRAY_SIZE = 50;
+
+// ── Search context (provides query + activeIndex to all tree nodes) ──────────────
+
+function escapeRegexJson(s: string) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+const SearchCtx = createContext<{ query: string; activeIndex: number }>({ query: '', activeIndex: 0 });
+
+/** Recursively checks whether any key or value inside `val` matches the query. */
+function valueHasMatch(val: unknown, query: string): boolean {
+  if (!query.trim()) return false;
+  try {
+    const re = new RegExp(escapeRegexJson(query), 'gi');
+    if (val === null) return re.test('null');
+    if (typeof val === 'boolean') return re.test(val.toString());
+    if (typeof val === 'number') return re.test(String(val));
+    if (typeof val === 'string') return re.test(truncateJsonString(val, STRING_TRUNCATE_MAX));
+    if (Array.isArray(val)) return (val as unknown[]).some(v => valueHasMatch(v, query));
+    if (typeof val === 'object') {
+      return Object.entries(val as Record<string, unknown>).some(
+        ([k, v]) => re.test(k) || valueHasMatch(v, query)
+      );
+    }
+  } catch { /**/ }
+  return false;
+}
+
+function HighlightText({ text }: { text: string }) {
+  const { query } = useContext(SearchCtx);
+  if (!query.trim()) return <>{text}</>;
+  try {
+    // Split with a capturing group: odd-indexed parts are the matches
+    const re = new RegExp(`(${escapeRegexJson(query)})`, 'gi');
+    const parts = text.split(re);
+    return (
+      <>
+        {parts.map((part, i) =>
+          i % 2 === 1
+            ? <mark key={i} className="json-search-match bg-yellow-400/40 text-current rounded-sm not-italic">{part}</mark>
+            : <span key={i}>{part}</span>
+        )}
+      </>
+    );
+  } catch {
+    return <>{text}</>;
+  }
+}
 // Objects/arrays at this depth or deeper auto-collapse on initial render
 const AUTO_COLLAPSE_DEPTH = 3;
 // Bodies larger than this (in chars) skip parsing until the user explicitly requests it
@@ -61,6 +111,14 @@ const JsonNode = memo(function JsonNode({ value, depth }: JsonNodeProps) {
     (isArray && count > AUTO_COLLAPSE_ARRAY_SIZE) || depth >= AUTO_COLLAPSE_DEPTH;
 
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
+  const { query } = useContext(SearchCtx);
+
+  // When a search is active, force-expand any node that contains a match so
+  // the highlighted text is visible. Each entry is checked individually so we
+  // only expand what is needed (a node with no matches in its subtree stays
+  // in its current collapsed state).
+  const nodeHasMatch = useMemo(() => valueHasMatch(value, query), [value, query]);
+  const effectiveCollapsed = query.trim() ? (nodeHasMatch ? false : collapsed) : collapsed;
 
   if (count === 0) {
     return <span className="text-fetchy-text">{openBracket}{closeBracket}</span>;
@@ -71,12 +129,12 @@ const JsonNode = memo(function JsonNode({ value, depth }: JsonNodeProps) {
       <button
         onClick={() => setCollapsed(c => !c)}
         className="inline-flex items-center justify-center w-4 h-4 mr-1 text-[10px] text-fetchy-text-muted hover:text-fetchy-accent transition-colors select-none align-middle"
-        aria-label={collapsed ? 'Expand' : 'Collapse'}
+        aria-label={effectiveCollapsed ? 'Expand' : 'Collapse'}
       >
-        {collapsed ? '▶' : '▼'}
+        {effectiveCollapsed ? '▶' : '▼'}
       </button>
       <span className="text-fetchy-text">{openBracket}</span>
-      {collapsed ? (
+      {effectiveCollapsed ? (
         <>
           <span
             className="text-fetchy-text-muted text-xs mx-1 cursor-pointer hover:text-fetchy-accent transition-colors"
@@ -95,7 +153,7 @@ const JsonNode = memo(function JsonNode({ value, depth }: JsonNodeProps) {
               <div key={k} className="mb-1 break-words">
                 {!isArray && (
                   <>
-                    <span className="json-key">"{k}"</span>
+                    <span className="json-key">"<HighlightText text={k} />"</span>
                     <span className="text-fetchy-text-muted">: </span>
                   </>
                 )}
@@ -121,7 +179,17 @@ function JsonValue({ value, depth = 0 }: { value: unknown; depth?: number }) {
 
 // ─── Root component ───────────────────────────────────────────────────────────
 
-export default function JSONViewer({ data }: JSONViewerProps) {
+export default function JSONViewer({ data, searchQuery, searchActiveIndex }: JSONViewerProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Scroll to nth visible match when activeIndex changes
+  useEffect(() => {
+    if (!searchQuery?.trim() || searchActiveIndex === undefined || !containerRef.current) return;
+    const matches = containerRef.current.querySelectorAll('.json-search-match');
+    if (!matches.length) return;
+    const target = matches[searchActiveIndex % matches.length] as HTMLElement;
+    target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [searchActiveIndex, searchQuery]);
   // Defer processing of new data so the rest of the UI (status bar, tabs, other
   // panels) stays responsive while the heavy JSON parse + render runs in the
   // background at lower priority.
@@ -194,14 +262,17 @@ export default function JSONViewer({ data }: JSONViewerProps) {
   }
 
   return (
-    <div
-      className={`h-full overflow-auto p-4 transition-opacity duration-150 ${isStale ? 'opacity-40' : ''}`}
-      onCopy={handleCopy}
-    >
-      <div className="text-sm font-mono break-words max-w-full">
-        <JsonValue value={parsedData} />
+    <SearchCtx.Provider value={{ query: searchQuery ?? '', activeIndex: searchActiveIndex ?? 0 }}>
+      <div
+        ref={containerRef}
+        className={`h-full overflow-auto p-4 transition-opacity duration-150 ${isStale ? 'opacity-40' : ''}`}
+        onCopy={handleCopy}
+      >
+        <div className="text-sm font-mono break-words max-w-full">
+          <JsonValue value={parsedData} />
+        </div>
       </div>
-    </div>
+    </SearchCtx.Provider>
   );
 }
 

@@ -14,7 +14,7 @@ export function useKeyboardShortcuts(additionalShortcuts?: ShortcutHandler[]) {
   const {
     tabs,
     activeTabId,
-    closeTab,
+    requestCloseTab,
     setActiveTab,
   } = useAppStore();
 
@@ -40,7 +40,7 @@ export function useKeyboardShortcuts(additionalShortcuts?: ShortcutHandler[]) {
       if (e.ctrlKey && e.key.toLowerCase() === 'w') {
         e.preventDefault();
         if (activeTabId) {
-          closeTab(activeTabId);
+          requestCloseTab(activeTabId);
         }
         return;
       }
@@ -76,7 +76,7 @@ export function useKeyboardShortcuts(additionalShortcuts?: ShortcutHandler[]) {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeTabId, tabs, closeTab, setActiveTab, additionalShortcuts]);
+  }, [activeTabId, tabs, requestCloseTab, setActiveTab, additionalShortcuts]);
 }
 
 // Available shortcuts for reference (used by KeyboardShortcutsModal)

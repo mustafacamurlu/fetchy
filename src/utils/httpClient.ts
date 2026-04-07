@@ -303,7 +303,30 @@ export const executeRequest = async ({
       }),
     });
 
-    const apiResponse: ApiResponse = await proxyResponse.json();
+    const proxyPayload = await proxyResponse.json() as Partial<ApiResponse> & { error?: string };
+    const apiResponse: ApiResponse = {
+      status: typeof proxyPayload.status === 'number' ? proxyPayload.status : 0,
+      statusText: typeof proxyPayload.statusText === 'string'
+        ? proxyPayload.statusText
+        : (proxyResponse.ok ? 'Error' : 'Proxy Error'),
+      headers: proxyPayload.headers && typeof proxyPayload.headers === 'object'
+        ? proxyPayload.headers
+        : {},
+      body: typeof proxyPayload.body === 'string'
+        ? proxyPayload.body
+        : JSON.stringify({ error: proxyPayload.error || 'Unexpected proxy response from browser proxy' }),
+      time: typeof proxyPayload.time === 'number'
+        ? proxyPayload.time
+        : Math.round(performance.now() - startTime),
+      size: typeof proxyPayload.size === 'number' ? proxyPayload.size : 0,
+      bodyEncoding: proxyPayload.bodyEncoding,
+      bodyTruncated: proxyPayload.bodyTruncated,
+      fullBodySize: proxyPayload.fullBodySize,
+      preScriptError: proxyPayload.preScriptError,
+      preScriptOutput: proxyPayload.preScriptOutput,
+      scriptError: proxyPayload.scriptError,
+      scriptOutput: proxyPayload.scriptOutput,
+    };
 
     // Run post-scripts: request script first, then collection script
     await runPostScripts(apiResponse, request.script, collectionScript, environmentVariables);
