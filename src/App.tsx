@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
-import { Settings, RefreshCw, PanelLeftClose, PanelLeftOpen, Rows, Columns, BookOpen, Star, Github, Keyboard, Info } from 'lucide-react';
+import { Settings, RefreshCw, PanelLeftClose, PanelLeftOpen, Rows, Columns, BookOpen, Star, Github, Keyboard, Info, Library } from 'lucide-react';
 import ImportModal, { type ImportSource } from './components/ImportModal';
 import ImportRequestModal from './components/ImportRequestModal';
 import ExportModal from './components/ExportModal';
@@ -18,6 +18,7 @@ import Tooltip from './components/Tooltip';
 import ModeDropdown from './components/ModeDropdown';
 import ComingSoonView from './components/ComingSoonView';
 import RestModeView from './components/RestModeView';
+import PublicApisModal from './components/PublicApisModal';
 import { useAppStore, rehydrateWorkspace } from './store/appStore';
 import { invalidateWriteCache } from './store/persistence';
 import { usePreferencesStore } from './store/preferencesStore';
@@ -52,6 +53,7 @@ function App() {
   const [showWorkspacesModal, setShowWorkspacesModal] = useState(false);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [showAboutModal, setShowAboutModal] = useState(false);
+  const [showPublicApisModal, setShowPublicApisModal] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [postUpdateInfo, setPostUpdateInfo] = useState<any>(null);
   const [githubStars, setGithubStars] = useState<number | null>(null);
@@ -292,6 +294,15 @@ function App() {
           </button>
         </Tooltip>
 
+        <Tooltip content="Public APIs Directory">
+          <button
+            onClick={() => setShowPublicApisModal(true)}
+            className="p-2 hover:bg-fetchy-border rounded text-fetchy-text-muted hover:text-fetchy-text"
+          >
+            <Library size={18} />
+          </button>
+        </Tooltip>
+
         <Tooltip content="Documentation">
           <button
             onClick={() => window.electronAPI?.openExternalUrl('https://akineralkan.github.io/fetchy/')}
@@ -385,6 +396,10 @@ function App() {
 
       {showAboutModal && (
         <AboutModal onClose={() => setShowAboutModal(false)} />
+      )}
+
+      {showPublicApisModal && (
+        <PublicApisModal onClose={() => setShowPublicApisModal(false)} />
       )}
     </div>
   );
