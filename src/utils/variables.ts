@@ -14,11 +14,12 @@ export const replaceVariables = (
 
   // Helper to get effective value (currentValue > value > initialValue)
   const getEffectiveValue = (variable: KeyValue): string => {
-    // Prefer currentValue if set and non-empty, otherwise use value, fallback to initialValue
-    if (variable.currentValue !== undefined && variable.currentValue !== '') {
+    // Prefer currentValue if set and non-empty (whitespace-only counts as empty for
+    // fallback purposes), otherwise use value, fallback to initialValue
+    if (variable.currentValue !== undefined && variable.currentValue.trim() !== '') {
       return variable.currentValue;
     }
-    if (variable.value !== undefined && variable.value !== '') {
+    if (variable.value !== undefined && variable.value.trim() !== '') {
       return variable.value;
     }
     return variable.initialValue || '';
@@ -33,11 +34,12 @@ export const replaceVariables = (
 
   // Add collection variables (will override env vars with same key)
   // Only override when the collection variable has a non-empty effective value so that
-  // empty collection variables (e.g. imported Postman defaults) don't shadow real env values.
+  // empty (or whitespace-only, e.g. imported Postman defaults left as a stray space) collection
+  // variables don't shadow real env values.
   for (const variable of variables) {
     if (variable.enabled) {
       const effectiveValue = getEffectiveValue(variable);
-      if (effectiveValue !== '' || !variableMap.has(variable.key)) {
+      if (effectiveValue.trim() !== '' || !variableMap.has(variable.key)) {
         variableMap.set(variable.key, effectiveValue);
       }
     }

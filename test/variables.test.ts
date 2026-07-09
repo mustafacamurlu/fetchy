@@ -84,6 +84,17 @@ describe('replaceVariables', () => {
     expect(replaceVariables('https://host.<<region>>.sws.siemens.com', collVars, envVars)).toBe('https://host.eu1.sws.siemens.com');
   });
 
+  it('whitespace-only collection variable does not shadow a non-empty environment variable', () => {
+    const collVars = [makeVar('tenant_id', '   ')];
+    const envVars = [makeVar('tenant_id', 'my-tenant')];
+    expect(replaceVariables('<<tenant_id>>.example.com', collVars, envVars)).toBe('my-tenant.example.com');
+  });
+
+  it('whitespace-only currentValue falls back to a non-empty value', () => {
+    const vars = [makeVar('key', 'base', { currentValue: '  ' })];
+    expect(replaceVariables('<<key>>', vars, [])).toBe('base');
+  });
+
   it('non-empty collection variable still overrides env variable', () => {
     const collVars = [makeVar('host', 'coll.api.com')];
     const envVars = [makeVar('host', 'env.api.com')];
